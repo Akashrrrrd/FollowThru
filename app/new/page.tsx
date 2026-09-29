@@ -1,0 +1,288 @@
+'use client';
+
+import { useState } from 'react';
+import { useRouter } from 'next/navigation';
+import { Loader2, Sparkles, AlertCircle, Users } from 'lucide-react';
+import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
+import { Textarea } from '@/components/ui/textarea';
+import { ProtectedRoute } from '@/components/protected-route';
+import { useAuthFetch } from '@/hooks/use-auth-fetch';
+import { Badge } from '@/components/ui/badge';
+import type { ExtractedCommitment } from '@/lib/types';
+
+const EXAMPLE_TRANSCRIPT = `Sarah: Alright, let's get started. John, did you send the Q3 report to the client yet?
+John: Not yet, I'll send the report by Friday.
+Sarah: Good. And Mike, can you schedule the design review for next Tuesday?
+Mike: Sure, I'll set up the calendar invite by tomorrow.
+Sarah: Great. I'll follow up with the client about the budget approval by the end of the week.
+John: I should also mention — I'll update the project tracker with the latest milestones by Monday.
+Sarah: Perfect. Let's circle back next week to check on everything.`;
+
+function NewMeetingContent() {
+  const router = useRouter();
+  const authFetch = useAuthFetch();
+  const [title, setTitle] = useState('');
+  const [transcript, setTranscript] = useState('');
+  const [selectedParticipant, setSelectedParticipant] = useState<string>('');
+  const [extractedCommitments, setExtractedCommitments] = useState<ExtractedCommitment[]>([]);
+  const [participants, setParticipants] = useState<string[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [step, setStep] = useState<'input' | 'participant-select'>('input');
+
+  // Extract unique participants from transcript
+  const extractParticipants = (text: string): string[] => {
+    const participantRegex = /^([A-Za-z]+):\s/gm;
+    const found = new Set<string>();
+    let match;
+    while ((match = participantRegex.exec(text)) !== null) {
+      found.add(match[1]);
+    }
+    return Array.from(found).sort();
+  };
+
+  const handleAnalyzeTranscript = async (e: React.FormEvent) => {
+    e.preventDefault();
+
+    if (!title.trim()) {
+      setError('Please enter a meeting title.');
+      return;
+    }
+    if (!transcript.trim()) {
+      setError('Please paste a meeting transcript.');
+      return;
+    }
+
+    setError(null);
+    
+    // Extract participants from transcript
+    const extractedParticipants = extractParticipants(transcript);
+    setParticipants(extractedParticipants);
+    
+    if (extractedParticipants.length === 0) {
+      setError('No participants found in transcript.');
+      return;
+    }
+
+    // Move to participant selection step
+    setStep('participant-select');
+  };
+
+  const handleSubmitWithParticipant = async () => {
+    if (!selectedParticipant) {
+      setError('Please select which participant is you.');
+      return;
+    }
+
+    setError(null);
+    setLoading(true);
+
+    try {
+      const res = await authFetch('/api/meetings/extract', {
+        method: 'POST',
+        body: JSON.stringify({
+          title: title.trim(),
+          transcript: transcript.trim(),
+          your_name: selectedParticipant, // Pass the selected participant name
+        }),
+      });
+
+      const data = await res.json();
+
+      if (!res.ok) {
+        setError(data.error || 'Something went wrong. Please try again.');
+        setLoading(false);
+        return;
+      }
+
+      if (data.warning) {
+        console.warn(data.warning);
+      }
+
+      router.push(`/meetings/${data.meeting.id}`);
+    } catch (err) {
+      console.error('Extract error:', err);
+      setError('Network error. Please check your connection and try again.');
+      setLoading(false);
+    }
+  };
+
+  const handleBackToInput = () => {
+    setStep('input');
+    setSelectedParticipant('');
+    setParticipants([]);
+    setError(null);
+  };
+
+  return (
+    <div className="mx-auto max-w-3xl px-4 py-10">
+      {step === 'input' ? (
+        <>
+          <div className="mb-8">
+            <h1 className="text-2xl font-bold text-gray-900">New Meeting</h1>
+            <p className="mt-1 text-sm text-gray-500">
+              Paste a transcript and FollowThru will extract every commitment
+              automatically.
+            </p>
+          </div>
+
+          <form onSubmit={handleAnalyzeTranscript} className="space-y-6">
+            <div>
+              <label
+                htmlFor="title"
+                className="mb-1.5 block text-sm font-medium text-gray-700"
+              >
+                Meeting Title
+              </label>
+              <Input
+                id="title"
+                value={title}
+                onChange={(e) => setTitle(e.target.value)}
+                placeholder="e.g. Weekly Team Sync — Sept 22"
+                disabled={loading}
+                className="border-gray-200"
+              />
+            </div>
+
+            <div>
+              <label
+                htmlFor="transcript"
+                className="mb-1.5 block text-sm font-medium text-gray-700"
+              >
+                Transcript
+              </label>
+              <Textarea
+                id="transcript"
+                value={transcript}
+                onChange={(e) => setTranscript(e.target.value)}
+                placeholder={EXAMPLE_TRANSCRIPT}
+                disabled={loading}
+                className="min-h-[300px] resize-y border-gray-200 font-mono text-sm leading-relaxed"
+              />
+            </div>
+
+            {error && (
+              <div className="flex items-center gap-2 rounded-md border border-red-200 bg-red-50 p-3 text-sm text-red-700">
+                <AlertCircle className="h-4 w-4 shrink-0" />
+                {error}
+              </div>
+            )}
+
+            <div className="flex items-center gap-4">
+              <Button
+                type="submit"
+                disabled={loading}
+                className="bg-blue-600 text-white hover:bg-blue-700"
+              >
+                {loading ? (
+                  <>
+                    <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                    Analyzing...
+                  </>
+                ) : (
+                  <>
+                    <Sparkles className="mr-2 h-4 w-4" />
+                    Analyze Transcript
+                  </>
+                )}
+              </Button>
+              <Button
+                type="button"
+                variant="ghost"
+                disabled={loading}
+                onClick={() => {
+                  setTitle('');
+                  setTranscript('');
+                  setError(null);
+                }}
+                className="text-gray-500 hover:text-gray-700"
+              >
+                Clear
+              </Button>
+            </div>
+          </form>
+        </>
+      ) : (
+        <>
+          <div className="mb-8">
+            <h1 className="text-2xl font-bold text-gray-900">Who are you in this meeting?</h1>
+            <p className="mt-1 text-sm text-gray-500">
+              Select which participant is you so we can identify your commitments correctly.
+            </p>
+          </div>
+
+          <div className="mb-8 rounded-lg border border-gray-200 bg-white p-6 shadow-sm">
+            <div className="mb-6">
+              <h2 className="mb-4 flex items-center gap-2 text-lg font-semibold text-gray-900">
+                <Users className="h-5 w-5" />
+                Meeting Participants
+              </h2>
+              <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
+                {participants.map((participant) => (
+                  <button
+                    key={participant}
+                    onClick={() => setSelectedParticipant(participant)}
+                    className={`rounded-lg border-2 p-4 text-center transition-all ${
+                      selectedParticipant === participant
+                        ? 'border-blue-600 bg-blue-50'
+                        : 'border-gray-200 bg-white hover:border-gray-300'
+                    }`}
+                  >
+                    <div className="text-lg font-semibold text-gray-900">{participant}</div>
+                    {selectedParticipant === participant && (
+                      <Badge className="mt-2 bg-blue-600">That's me</Badge>
+                    )}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            {error && (
+              <div className="mb-6 flex items-center gap-2 rounded-md border border-red-200 bg-red-50 p-3 text-sm text-red-700">
+                <AlertCircle className="h-4 w-4 shrink-0" />
+                {error}
+              </div>
+            )}
+
+            <div className="flex gap-3">
+              <Button
+                onClick={handleSubmitWithParticipant}
+                disabled={loading || !selectedParticipant}
+                className="flex-1 bg-blue-600 text-white hover:bg-blue-700"
+              >
+                {loading ? (
+                  <>
+                    <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                    Extracting...
+                  </>
+                ) : (
+                  <>
+                    <Sparkles className="mr-2 h-4 w-4" />
+                    Extract Commitments
+                  </>
+                )}
+              </Button>
+              <Button
+                onClick={handleBackToInput}
+                disabled={loading}
+                variant="outline"
+                className="border-gray-200"
+              >
+                Back
+              </Button>
+            </div>
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
+export default function NewMeetingPage() {
+  return (
+    <ProtectedRoute>
+      <NewMeetingContent />
+    </ProtectedRoute>
+  );
+}

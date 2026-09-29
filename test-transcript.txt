@@ -1,0 +1,65 @@
+Test Transcript: Scheduled Server Maintenance
+Meeting Date: September 29, 2026 (Tuesday)
+
+David: Good morning everyone. We need to discuss the scheduled server maintenance happening this weekend. Priya, can you start by reviewing the server logs to identify any critical issues?
+
+Priya: Sure, I'll review the server logs and identify any critical issues tomorrow.
+
+David: Great. Arjun, we also need to ensure we have a proper backup of the production database. Can you handle that before Friday?
+
+Arjun: Sure, I'll create the backup and verify that it can be restored.
+
+Priya: I'll also update the maintenance checklist by Wednesday.
+
+David: Perfect. We should also inform the customer support team. Arjun, can you handle that?
+
+Arjun: Actually, I think you should handle that David, since you're the team lead.
+
+David: Fair point. I'll inform the customer support team about the maintenance schedule next Monday.
+
+Arjun: Once the backup is verified, I'll document the recovery steps.
+
+David: Excellent. Let's also plan to meet next Tuesday to review everything before the maintenance.
+
+Maya: Great. Let's review the campaign status again in two weeks.
+
+David: Perfect, that sounds good.
+
+---
+
+EXPECTED OUTPUT (for September 29, 2026, Tuesday):
+
+1. Task: Review server logs and identify critical issues
+   Owner: Priya
+   Due Date: September 30, 2026 (tomorrow)
+   Source: "Sure, I'll review the server logs and identify any critical issues tomorrow."
+
+2. Task: Create backup of production database and verify restoration
+   Owner: Arjun
+   Due Date: October 2, 2026 (by Friday)
+   Source: "Sure, I'll create the backup and verify that it can be restored."
+
+3. Task: Update maintenance checklist
+   Owner: Priya
+   Due Date: September 30, 2026 (by Wednesday - which is the next day)
+   Source: "I'll also update the maintenance checklist by Wednesday."
+
+4. Task: Inform customer support team about maintenance schedule
+   Owner: David
+   Due Date: October 5, 2026 (next Monday - 6 days after meeting)
+   Source: "I'll inform the customer support team about the maintenance schedule next Monday."
+
+5. Task: Document recovery steps
+   Owner: Arjun
+   Due Date: null (dependency-based: "once backup is verified")
+   Source: "Once the backup is verified, I'll document the recovery steps."
+
+6. Task: Review everything before maintenance
+   Owner: David
+   Due Date: October 6, 2026 (next Tuesday - 7 days after meeting)
+   Source: "Let's also plan to meet next Tuesday to review everything before the maintenance."
+
+7. Task: Review campaign status
+   Owner: Maya
+   Due Date: October 13, 2026 (in two weeks - 14 days after meeting)
+   Source: "Let's review the campaign status again in two weeks."

@@ -1,26 +1,718 @@
-@import "tailwindcss";
+@import url('https://fonts.googleapis.com/css2?family=Public+Sans:wght@400;500;600;700&family=Playfair+Display:ital,wght@0,500;0,600;0,700;0,800;1,500&family=Source+Serif+4:opsz,wght@8..60,400;8..60,600&display=swap');
 
-:root {
-  --background: #ffffff;
-  --foreground: #171717;
-}
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
 
-@theme inline {
-  --color-background: var(--background);
-  --color-foreground: var(--foreground);
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
-}
-
-@media (prefers-color-scheme: dark) {
+/* ==========================================================================
+   DESIGN TOKENS
+   Identity: "Royal Ledger" — ink navy, antique gold foil, cool porcelain paper.
+   One signature move: gold foil hairlines and engraved surfaces.
+   Everything else stays quiet and disciplined.
+   ========================================================================== */
+@layer base {
   :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
+    /* Surfaces */
+    --background: 210 30% 98%;
+    --foreground: 224 50% 10%;
+    --card: 0 0% 100%;
+    --card-foreground: 224 50% 10%;
+    --popover: 0 0% 100%;
+    --popover-foreground: 224 50% 10%;
+
+    /* Brand */
+    --primary: 224 66% 22%;               /* ink navy */
+    --primary-foreground: 210 40% 98%;
+    --secondary: 220 24% 94%;
+    --secondary-foreground: 224 50% 14%;
+    --muted: 220 20% 95%;
+    --muted-foreground: 222 12% 38%;
+    --accent: 220 26% 92%;
+    --accent-foreground: 224 50% 14%;
+
+    /* Signature gold foil */
+    --gold: 39 60% 44%;
+    --gold-light: 42 72% 62%;
+    --gold-dark: 35 62% 32%;
+    --gold-foreground: 36 70% 10%;
+
+    /* Ink (deep surfaces such as hero and footer) */
+    --ink: 226 58% 9%;
+    --ink-2: 224 52% 15%;
+
+    /* Feedback */
+    --destructive: 0 66% 46%;
+    --destructive-foreground: 0 0% 98%;
+    --success: 152 55% 32%;
+    --warning: 34 90% 44%;
+
+    /* Chart series: navy, gold, teal, slate, burgundy */
+    --chart-1: 224 66% 30%;
+    --chart-2: 39 60% 46%;
+    --chart-3: 186 45% 32%;
+    --chart-4: 215 20% 52%;
+    --chart-5: 346 50% 40%;
+
+    /* Lines & inputs */
+    --border: 220 18% 87%;
+    --input: 220 18% 84%;
+    --ring: 224 66% 34%;
+    --radius: 0.5rem;
+
+    /* Elevation: cool-tinted, layered */
+    --shadow-xs: 0 1px 1px hsl(224 50% 10% / 0.04);
+    --shadow-sm: 0 1px 2px hsl(224 50% 10% / 0.06), 0 1px 1px hsl(224 50% 10% / 0.03);
+    --shadow-md: 0 1px 2px hsl(224 50% 10% / 0.04), 0 4px 10px hsl(224 50% 10% / 0.06), 0 12px 24px -8px hsl(224 50% 10% / 0.08);
+    --shadow-lg: 0 2px 4px hsl(224 50% 10% / 0.04), 0 10px 24px hsl(224 50% 10% / 0.08), 0 28px 56px -12px hsl(224 50% 10% / 0.16);
+    --shadow-gold: 0 0 0 1px hsl(var(--gold) / 0.35), 0 8px 24px -6px hsl(var(--gold) / 0.35);
+
+    /* Type */
+    --font-display: 'Playfair Display', 'Georgia', 'Times New Roman', serif;
+    --font-serif: 'Source Serif 4', 'Georgia', serif;
+    --font-sans: 'Public Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', 'Helvetica Neue', sans-serif;
+    --font-mono: 'Menlo', 'Monaco', 'Consolas', 'Liberation Mono', monospace;
+
+    /* Motion */
+    --ease-out: cubic-bezier(0.22, 1, 0.36, 1);
+  }
+
+  .dark {
+    --background: 226 48% 7%;
+    --foreground: 40 22% 94%;
+    --card: 225 42% 10.5%;
+    --card-foreground: 40 22% 94%;
+    --popover: 225 42% 10.5%;
+    --popover-foreground: 40 22% 94%;
+
+    --primary: 42 72% 62%;                /* gold becomes the action color at night */
+    --primary-foreground: 226 58% 8%;
+    --secondary: 224 30% 15%;
+    --secondary-foreground: 40 22% 94%;
+    --muted: 224 30% 14%;
+    --muted-foreground: 220 14% 68%;
+    --accent: 224 30% 18%;
+    --accent-foreground: 40 22% 94%;
+
+    --gold: 42 68% 60%;
+    --gold-light: 44 80% 74%;
+    --gold-dark: 38 62% 44%;
+    --gold-foreground: 36 70% 10%;
+
+    --ink: 226 58% 5%;
+    --ink-2: 224 46% 11%;
+
+    --destructive: 0 70% 60%;
+    --success: 152 50% 48%;
+    --warning: 36 90% 58%;
+
+    --chart-1: 219 78% 68%;
+    --chart-2: 42 68% 60%;
+    --chart-3: 180 45% 55%;
+    --chart-4: 215 22% 68%;
+    --chart-5: 346 60% 64%;
+
+    --border: 224 26% 19%;
+    --input: 224 26% 22%;
+    --ring: 42 72% 62%;
+
+    --shadow-xs: 0 1px 1px hsl(0 0% 0% / 0.3);
+    --shadow-sm: 0 1px 2px hsl(0 0% 0% / 0.35);
+    --shadow-md: 0 1px 2px hsl(0 0% 0% / 0.3), 0 6px 16px hsl(0 0% 0% / 0.35);
+    --shadow-lg: 0 2px 4px hsl(0 0% 0% / 0.3), 0 16px 40px hsl(0 0% 0% / 0.5);
+    --shadow-gold: 0 0 0 1px hsl(var(--gold) / 0.4), 0 8px 28px -6px hsl(var(--gold) / 0.3);
   }
 }
 
-body {
-  background: var(--background);
-  color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+/* ==========================================================================
+   BASE
+   ========================================================================== */
+@layer base {
+  * {
+    @apply border-border;
+  }
+
+  html {
+    font-family: var(--font-sans);
+    scroll-behavior: smooth;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    text-rendering: optimizeLegibility;
+    -webkit-text-size-adjust: 100%;
+  }
+
+  body {
+    @apply bg-background text-foreground;
+    font-feature-settings: "kern" 1, "liga" 1, "calt" 1;
+    line-height: 1.6;
+    min-height: 100vh;
+  }
+
+  /* Headings: Playfair for display, sans for small headings */
+  h1, h2, h3 {
+    font-family: var(--font-display);
+    font-optical-sizing: auto;
+    text-wrap: balance;
+    color: hsl(var(--foreground));
+  }
+
+  h1 {
+    @apply font-bold;
+    font-size: clamp(2.5rem, 6vw, 4rem);
+    line-height: 1.05;
+    letter-spacing: -0.028em;
+  }
+
+  h2 {
+    @apply font-semibold;
+    font-size: clamp(1.75rem, 3.8vw, 2.5rem);
+    line-height: 1.15;
+    letter-spacing: -0.02em;
+  }
+
+  h3 {
+    @apply font-semibold;
+    font-size: clamp(1.25rem, 2.6vw, 1.625rem);
+    line-height: 1.25;
+    letter-spacing: -0.012em;
+  }
+
+  h4, h5, h6 {
+    @apply font-semibold;
+    font-family: var(--font-sans);
+    line-height: 1.4;
+    letter-spacing: -0.006em;
+  }
+
+  p {
+    line-height: 1.7;
+    text-wrap: pretty;
+  }
+
+  a {
+    text-underline-offset: 4px;
+    text-decoration-thickness: 1px;
+    transition: color 0.2s ease, text-decoration-color 0.2s ease;
+  }
+
+  hr {
+    @apply border-t border-border;
+  }
+
+  code {
+    font-family: var(--font-mono);
+    font-size: 0.86em;
+    @apply rounded px-1.5 py-0.5 bg-muted text-foreground;
+  }
+
+  pre {
+    @apply rounded-lg border border-border bg-muted/60 p-4 overflow-x-auto;
+    box-shadow: var(--shadow-xs);
+  }
+
+  pre code {
+    @apply bg-transparent p-0;
+  }
+
+  button {
+    transition: background-color 0.2s ease, color 0.2s ease, border-color 0.2s ease,
+                box-shadow 0.25s var(--ease-out), transform 0.15s ease;
+  }
+
+  button:active:not(:disabled) {
+    transform: translateY(1px);
+  }
+
+  input, textarea, select {
+    @apply bg-background border-input;
+    transition: border-color 0.2s ease, box-shadow 0.2s ease;
+  }
+
+  input::placeholder,
+  textarea::placeholder {
+    @apply text-muted-foreground;
+    opacity: 0.75;
+  }
+
+  /* Double focus ring: readable on any surface */
+  :focus-visible {
+    outline: 2px solid hsl(var(--ring));
+    outline-offset: 2px;
+    border-radius: calc(var(--radius) - 2px);
+  }
+
+  ::selection {
+    background: hsl(var(--gold) / 0.3);
+    color: hsl(var(--foreground));
+  }
+
+  * {
+    scrollbar-width: thin;
+    scrollbar-color: hsl(var(--border)) transparent;
+  }
+
+  ::-webkit-scrollbar { width: 10px; height: 10px; }
+  ::-webkit-scrollbar-track { background: transparent; }
+  ::-webkit-scrollbar-thumb {
+    background: hsl(var(--border));
+    border-radius: 999px;
+    border: 2px solid hsl(var(--background));
+  }
+  ::-webkit-scrollbar-thumb:hover { background: hsl(var(--muted-foreground) / 0.5); }
+}
+
+/* ==========================================================================
+   COMPONENTS
+   ========================================================================== */
+@layer components {
+
+  /* ---------- Page layout ---------- */
+  .container-classic {
+    width: 100%;
+    max-width: 72rem;
+    margin-inline: auto;
+    padding-inline: clamp(1rem, 4vw, 2rem);
+  }
+
+  .section-classic {
+    padding-block: clamp(3.5rem, 9vw, 7rem);
+  }
+
+  /* Subtle paper grain over the whole page: add class to <body> or a wrapper */
+  .paper {
+    background-color: hsl(var(--background));
+    background-image:
+      radial-gradient(1200px 500px at 50% -10%, hsl(var(--gold) / 0.07), transparent 70%),
+      url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='160' height='160'><filter id='n'><feTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2' stitchTiles='stitch'/><feColorMatrix values='0 0 0 0 0.1  0 0 0 0 0.15  0 0 0 0 0.3  0 0 0 0.035 0'/></filter><rect width='100%' height='100%' filter='url(%23n)'/></svg>");
+  }
+
+  /* ---------- Hero on deep ink ---------- */
+  .hero-ink {
+    position: relative;
+    isolation: isolate;
+    color: hsl(40 22% 94%);
+    background:
+      radial-gradient(900px 420px at 15% 0%, hsl(var(--gold) / 0.18), transparent 60%),
+      radial-gradient(700px 500px at 100% 100%, hsl(224 70% 40% / 0.35), transparent 65%),
+      linear-gradient(160deg, hsl(var(--ink-2)), hsl(var(--ink)));
+  }
+
+  /* Fine engraved grid, masked so it fades out */
+  .hero-ink::before {
+    content: "";
+    position: absolute;
+    inset: 0;
+    z-index: -1;
+    background-image:
+      linear-gradient(hsl(0 0% 100% / 0.04) 1px, transparent 1px),
+      linear-gradient(90deg, hsl(0 0% 100% / 0.04) 1px, transparent 1px);
+    background-size: 56px 56px;
+    -webkit-mask-image: radial-gradient(ellipse at 50% 30%, #000 20%, transparent 75%);
+            mask-image: radial-gradient(ellipse at 50% 30%, #000 20%, transparent 75%);
+  }
+
+  .hero-ink h1,
+  .hero-ink h2,
+  .hero-ink h3 {
+    color: hsl(40 25% 97%);
+  }
+
+  .hero-ink p {
+    color: hsl(220 16% 78%);
+  }
+
+  /* Gold foil text: use sparingly, once per screen */
+  .text-foil {
+    background: linear-gradient(100deg,
+      hsl(var(--gold-dark)) 0%,
+      hsl(var(--gold-light)) 35%,
+      hsl(var(--gold)) 55%,
+      hsl(var(--gold-light)) 80%,
+      hsl(var(--gold-dark)) 100%);
+    background-size: 200% auto;
+    -webkit-background-clip: text;
+            background-clip: text;
+    color: transparent;
+    -webkit-text-fill-color: transparent;
+  }
+
+  /* ---------- Cards ---------- */
+  .card-classic {
+    position: relative;
+    @apply rounded-xl border bg-card text-card-foreground;
+    box-shadow: var(--shadow-md);
+    transition: box-shadow 0.35s var(--ease-out), border-color 0.35s ease, transform 0.35s var(--ease-out);
+  }
+
+  .card-classic:hover {
+    box-shadow: var(--shadow-lg);
+    border-color: hsl(var(--gold) / 0.5);
+    transform: translateY(-2px);
+  }
+
+  /* Engraved surface: inset highlight + gold foil edge on top */
+  .card-engraved {
+    @apply card-classic;
+    box-shadow: var(--shadow-md), inset 0 1px 0 hsl(0 0% 100% / 0.7);
+    overflow: hidden;
+  }
+
+  .dark .card-engraved {
+    box-shadow: var(--shadow-md), inset 0 1px 0 hsl(0 0% 100% / 0.05);
+  }
+
+  .card-engraved::before {
+    content: "";
+    position: absolute;
+    inset: 0 0 auto 0;
+    height: 2px;
+    background: linear-gradient(90deg,
+      hsl(var(--gold-dark)), hsl(var(--gold-light)) 50%, hsl(var(--gold-dark)));
+    opacity: 0.9;
+  }
+
+  /* Featured card with gradient foil border */
+  .card-featured {
+    position: relative;
+    border-radius: calc(var(--radius) + 6px);
+    padding: 1px;
+    background: linear-gradient(145deg,
+      hsl(var(--gold-light)), hsl(var(--gold-dark)) 45%, hsl(var(--gold-light)));
+    box-shadow: var(--shadow-gold);
+  }
+
+  .card-featured > * {
+    @apply bg-card text-card-foreground;
+    border-radius: calc(var(--radius) + 5px);
+    height: 100%;
+  }
+
+  /* ---------- Buttons ---------- */
+  .btn {
+    @apply inline-flex items-center justify-center gap-2 rounded-md px-5 py-2.5
+           text-sm font-semibold tracking-tight cursor-pointer select-none
+           disabled:pointer-events-none disabled:opacity-50;
+  }
+
+  .btn-lg {
+    @apply px-7 py-3.5 text-base;
+  }
+
+  .btn-primary {
+    @apply btn text-primary-foreground;
+    background: linear-gradient(180deg, hsl(var(--primary) / 0.94), hsl(var(--primary)));
+    box-shadow: var(--shadow-sm), inset 0 1px 0 hsl(0 0% 100% / 0.16);
+  }
+
+  .btn-primary:hover {
+    box-shadow: var(--shadow-md), inset 0 1px 0 hsl(0 0% 100% / 0.2);
+    filter: brightness(1.08);
+  }
+
+  .btn-gold {
+    @apply btn;
+    color: hsl(var(--gold-foreground));
+    background: linear-gradient(180deg, hsl(var(--gold-light)), hsl(var(--gold)));
+    box-shadow: var(--shadow-sm), inset 0 1px 0 hsl(0 0% 100% / 0.4), inset 0 -1px 0 hsl(var(--gold-dark) / 0.4);
+  }
+
+  .btn-gold:hover {
+    box-shadow: var(--shadow-gold), inset 0 1px 0 hsl(0 0% 100% / 0.45);
+    filter: brightness(1.04);
+  }
+
+  .btn-outline {
+    @apply btn border border-input bg-card text-foreground;
+    box-shadow: var(--shadow-xs);
+  }
+
+  .btn-outline:hover {
+    @apply bg-accent;
+    border-color: hsl(var(--gold) / 0.65);
+  }
+
+  .btn-ghost {
+    @apply btn text-foreground;
+  }
+
+  .btn-ghost:hover {
+    @apply bg-accent;
+  }
+
+  /* ---------- Navigation ---------- */
+  .nav-classic {
+    position: sticky;
+    top: 0;
+    z-index: 50;
+    background: hsl(var(--background) / 0.82);
+    backdrop-filter: saturate(170%) blur(14px);
+    -webkit-backdrop-filter: saturate(170%) blur(14px);
+    border-bottom: 1px solid hsl(var(--border));
+  }
+
+  .nav-link {
+    position: relative;
+    @apply text-sm font-medium text-muted-foreground;
+    padding-block: 0.375rem;
+    text-decoration: none;
+  }
+
+  .nav-link:hover,
+  .nav-link[aria-current="page"] {
+    @apply text-foreground;
+  }
+
+  .nav-link::after {
+    content: "";
+    position: absolute;
+    left: 0;
+    right: 0;
+    bottom: -2px;
+    height: 2px;
+    background: hsl(var(--gold));
+    transform: scaleX(0);
+    transform-origin: left;
+    transition: transform 0.35s var(--ease-out);
+  }
+
+  .nav-link:hover::after,
+  .nav-link[aria-current="page"]::after {
+    transform: scaleX(1);
+  }
+
+  /* ---------- Forms ---------- */
+  .field {
+    @apply w-full rounded-md border border-input bg-card px-3.5 py-2.5 text-sm;
+    box-shadow: var(--shadow-xs), inset 0 1px 2px hsl(224 50% 10% / 0.04);
+  }
+
+  .field:hover {
+    border-color: hsl(var(--muted-foreground) / 0.5);
+  }
+
+  .field:focus {
+    outline: none;
+    border-color: hsl(var(--ring));
+    box-shadow: 0 0 0 4px hsl(var(--ring) / 0.16), var(--shadow-xs);
+  }
+
+  .field[aria-invalid="true"] {
+    border-color: hsl(var(--destructive));
+    box-shadow: 0 0 0 4px hsl(var(--destructive) / 0.12);
+  }
+
+  .label-classic {
+    @apply mb-1.5 block text-sm font-medium text-foreground;
+  }
+
+  .hint {
+    @apply mt-1.5 text-xs text-muted-foreground;
+  }
+
+  /* ---------- Data ---------- */
+  .table-classic {
+    @apply w-full text-sm;
+    border-collapse: separate;
+    border-spacing: 0;
+  }
+
+  .table-classic thead th {
+    @apply px-4 py-3 text-left text-xs font-semibold text-muted-foreground bg-muted/60;
+    border-bottom: 1px solid hsl(var(--border));
+    letter-spacing: 0.02em;
+  }
+
+  .table-classic tbody td {
+    @apply px-4 py-3.5;
+    border-bottom: 1px solid hsl(var(--border) / 0.7);
+  }
+
+  .table-classic tbody tr {
+    transition: background-color 0.15s ease;
+  }
+
+  .table-classic tbody tr:hover {
+    background: hsl(var(--accent) / 0.55);
+  }
+
+  .stat-value {
+    font-family: var(--font-display);
+    font-size: clamp(2rem, 4vw, 2.75rem);
+    font-weight: 700;
+    line-height: 1;
+    letter-spacing: -0.02em;
+    font-variant-numeric: lining-nums tabular-nums;
+  }
+
+  .tabular {
+    font-variant-numeric: tabular-nums lining-nums;
+  }
+
+  /* ---------- Badges & alerts ---------- */
+  .badge-classic {
+    @apply inline-flex items-center gap-1 rounded-full border px-2.5 py-0.5 text-xs font-medium;
+    background: hsl(var(--gold) / 0.12);
+    border-color: hsl(var(--gold) / 0.38);
+    color: hsl(var(--gold-dark));
+  }
+
+  .dark .badge-classic {
+    color: hsl(var(--gold-light));
+  }
+
+  .alert-classic {
+    @apply relative rounded-lg border bg-card p-4 pl-5 text-sm;
+    box-shadow: var(--shadow-sm);
+  }
+
+  .alert-classic::before {
+    content: "";
+    position: absolute;
+    inset: 8px auto 8px 0;
+    width: 3px;
+    border-radius: 999px;
+    background: hsl(var(--gold));
+  }
+
+  .alert-classic[data-tone="danger"]::before  { background: hsl(var(--destructive)); }
+  .alert-classic[data-tone="success"]::before { background: hsl(var(--success)); }
+
+  /* ---------- Ornaments ---------- */
+  .divider-ornament {
+    display: flex;
+    align-items: center;
+    gap: 1rem;
+    color: hsl(var(--gold));
+  }
+
+  .divider-ornament::before,
+  .divider-ornament::after {
+    content: "";
+    flex: 1;
+    height: 1px;
+    background: linear-gradient(90deg, transparent, hsl(var(--gold) / 0.55), transparent);
+  }
+
+  .divider-ornament > span {
+    width: 7px;
+    height: 7px;
+    background: currentColor;
+    transform: rotate(45deg);
+  }
+
+  .rule-gold {
+    position: relative;
+  }
+
+  .rule-gold::before {
+    content: "";
+    position: absolute;
+    inset: 0 0 auto 0;
+    height: 2px;
+    background: linear-gradient(90deg, hsl(var(--gold)), hsl(var(--gold) / 0));
+    border-radius: inherit;
+  }
+
+  /* Long-form reading */
+  .prose-classic {
+    font-family: var(--font-serif);
+    font-size: 1.125rem;
+    line-height: 1.8;
+  }
+
+  .prose-classic p,
+  .prose-classic li {
+    max-width: 68ch;
+  }
+
+  .prose-classic > p:first-of-type::first-letter {
+    font-family: var(--font-display);
+    float: left;
+    font-size: 3.6em;
+    line-height: 0.85;
+    font-weight: 700;
+    padding: 0.08em 0.12em 0 0;
+    color: hsl(var(--gold-dark));
+  }
+
+  .dark .prose-classic > p:first-of-type::first-letter {
+    color: hsl(var(--gold));
+  }
+
+  /* Loading placeholder */
+  .skeleton {
+    @apply rounded-md;
+    background: linear-gradient(90deg,
+      hsl(var(--muted)) 25%, hsl(var(--accent)) 50%, hsl(var(--muted)) 75%);
+    background-size: 200% 100%;
+    animation: shimmer 1.6s ease-in-out infinite;
+  }
+}
+
+/* ==========================================================================
+   UTILITIES
+   ========================================================================== */
+@layer utilities {
+  .font-display { font-family: var(--font-display); }
+  .font-serif-body { font-family: var(--font-serif); }
+  .text-balance { text-wrap: balance; }
+
+  .shadow-soft     { box-shadow: var(--shadow-md); }
+  .shadow-elevated { box-shadow: var(--shadow-lg); }
+  .shadow-gold     { box-shadow: var(--shadow-gold); }
+
+  .text-gold { color: hsl(var(--gold)); }
+  .bg-ink    { background-color: hsl(var(--ink)); }
+
+  /* One orchestrated entrance: apply to the hero only */
+  .reveal {
+    animation: reveal 0.9s var(--ease-out) both;
+  }
+  .reveal-delay-1 { animation-delay: 0.12s; }
+  .reveal-delay-2 { animation-delay: 0.24s; }
+  .reveal-delay-3 { animation-delay: 0.36s; }
+
+  .foil-shine {
+    animation: foil 8s linear infinite;
+  }
+}
+
+@keyframes reveal {
+  from { opacity: 0; transform: translateY(14px); }
+  to   { opacity: 1; transform: none; }
+}
+
+@keyframes shimmer {
+  from { background-position: 200% 0; }
+  to   { background-position: -200% 0; }
+}
+
+@keyframes foil {
+  from { background-position: 0% center; }
+  to   { background-position: 200% center; }
+}
+
+/* ==========================================================================
+   ACCESSIBILITY & PRINT
+   ========================================================================== */
+@media (prefers-reduced-motion: reduce) {
+  html { scroll-behavior: auto; }
+
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+
+@media (prefers-contrast: more) {
+  :root {
+    --border: 220 20% 60%;
+    --muted-foreground: 222 20% 25%;
+  }
+}
+
+@media print {
+  body { background: #fff; color: #000; }
+  .nav-classic { position: static; }
+  .card-classic, .card-engraved { box-shadow: none; border-color: #ccc; transform: none; }
 }

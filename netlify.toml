@@ -1,9 +1,10 @@
 [build]
+  command = "npx next build"
+  publish = ".next"
 
-command = "npx next build"
-
-publish = ".next"
+# Exclude NEXT_PUBLIC_ keys from secrets scanning (they're meant to be public)
+[build.environment]
+  SECRETS_SCAN_OMIT_KEYS = "NEXT_PUBLIC_SUPABASE_ANON_KEY,NEXT_PUBLIC_SUPABASE_URL"
 
 [[plugins]]
-
-package = "@netlify/plugin-nextjs"
+  package = "@netlify/plugin-nextjs"

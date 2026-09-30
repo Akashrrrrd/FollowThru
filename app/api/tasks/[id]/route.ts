@@ -8,6 +8,8 @@ import { addHistoryEntry } from '@/lib/history';
 
 import type { TaskStatus } from '@/lib/types';
 
+export const dynamic = 'force-dynamic';
+
 export async function PATCH(
 
   req: NextRequest,

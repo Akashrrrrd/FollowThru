@@ -4,6 +4,8 @@ import { createServerClient, getUserFromRequest } from '@/lib/supabase-server';
 
 import { updateOverdueTasks } from '@/lib/overdue';
 
+export const dynamic = 'force-dynamic';
+
 export async function GET(
 
   req: NextRequest,

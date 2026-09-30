@@ -4,6 +4,8 @@ import { createServerClient, getUserFromRequest } from '@/lib/supabase-server';
 
 import { callGroqForNudge } from '@/lib/groq';
 
+export const dynamic = 'force-dynamic';
+
 export async function POST(
 
   req: NextRequest,

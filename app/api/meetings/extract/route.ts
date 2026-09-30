@@ -14,6 +14,8 @@ import { logRejections, getErrorMetrics } from '@/lib/pipeline-error-handler';
 
 import type { ExtractedCommitment } from '@/lib/types';
 
+export const dynamic = 'force-dynamic';
+
 export async function POST(req: NextRequest) {
 
   try {

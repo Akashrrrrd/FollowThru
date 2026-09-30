@@ -242,6 +242,7 @@ export function validateParsing(context: StageContext): ValidationResult {
       warnings.push({
         code: "PARSING_INVALID_CONFIDENCE",
         message: `Commitment ${i}: Invalid confidence level, defaulting to medium`,
+        suggestion: "Confidence should be 'high', 'medium', or 'low'",
       });
     }
 

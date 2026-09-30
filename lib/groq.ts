@@ -202,6 +202,8 @@ export async function callGroqForExtraction(
     throw new Error('GROQ_API_KEY is not configured.');
   }
 
+  const extractionModel = process.env.GROQ_MODEL || 'openai/gpt-oss-120b';
+  console.log('[GROQ] Using model:', extractionModel);
   console.log('[GROQ] Starting extraction with API key present');
 
   // [EXTRACTION DEBUG] Log the meeting date for context
@@ -218,7 +220,7 @@ export async function callGroqForExtraction(
         Authorization: `Bearer ${apiKey}`,
       },
       body: JSON.stringify({
-        model: 'llama-3.1-70b-versatile', // Currently supported fast model
+        model: extractionModel,
         max_tokens: 4096,
         messages: [
           { role: 'system', content: buildSystemPrompt(meetingDate) },
@@ -237,6 +239,18 @@ export async function callGroqForExtraction(
   if (!response.ok) {
     const errText = await response.text();
     console.error('[GROQ] API error response:', errText);
+    
+    // Parse error to check if it's a model decommissioning error (non-transient)
+    try {
+      const errData = JSON.parse(errText);
+      if (errData.error?.code === 'model_decommissioned') {
+        console.error('[GROQ] Model decommissioned error - DO NOT RETRY');
+        throw new Error(`Groq model decommissioned (${response.status}): ${errData.error.message}`);
+      }
+    } catch (e) {
+      // If we can't parse, fall through to generic error
+    }
+    
     throw new Error(`Groq API error (${response.status}): ${errText.substring(0, 200)}`);
   }
 
@@ -287,6 +301,8 @@ export async function callGroqForNudge(
     throw new Error('GROQ_API_KEY is not configured.');
   }
 
+  const nudgeModel = process.env.GROQ_MODEL || 'openai/gpt-oss-120b';
+
   const dueInfo = task.due_date
     ? `It was due on ${task.due_date}.`
     : 'No specific due date was set.';
@@ -308,7 +324,7 @@ The message should be warm but clear, ready to send via Slack or email. Do not i
         Authorization: `Bearer ${apiKey}`,
       },
       body: JSON.stringify({
-        model: 'llama-3.1-8b-instant',
+        model: nudgeModel,
         max_tokens: 256,
         messages: [{ role: 'user', content: prompt }],
         temperature: 0.7,

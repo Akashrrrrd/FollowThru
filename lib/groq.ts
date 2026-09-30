@@ -34,7 +34,7 @@ NO "Let's make sure everyone knows their tasks."
 FIELDS
 - owner: The person who commits, never the one who asks. Use the speaker label for "I'll" and "I can". For "Let's" and "We'll", use the speaker unless a name is given ("Let's have Priya test it" = Priya). If no name can be found, use "Unassigned". Use first names exactly as written in the transcript.
 - description: Short action phrase that starts with a verb. No filler, no owner name, no date.
-- due_date: Copy the spoken time phrase exactly as said ("tomorrow", "by Friday", "next Wednesday", "in two weeks", "end of week"). Never calculate, convert or reformat it. Copy a YYYY-MM-DD only if the transcript says it that way. Use null if no time is said, or if the only timing is a dependency ("after Rahul finishes"). If both a date and a dependency exist, keep the date.
+- due_date: Copy the spoken time phrase exactly as said ("tomorrow", "by Friday", "next Wednesday", "in two weeks", "end of week"). Never calculate, convert or reformat it. Copy a YYYY-MM-DD only if the transcript says it that way. ALWAYS extract explicit dates even for collective commitments. Use null if no time is said, or if the only timing is a dependency ("after Rahul finishes"). If both a date and a dependency exist, keep the date.
 - source_quote: The exact sentence from the transcript, letter for letter, without the speaker label. If the commitment spans two sentences, use the one holding the action.
 - dependency: The condition as a short phrase ("Rahul finishes the mapping"), from words like "once", "after", "when", "if I get". Otherwise null.
 - confidence:
@@ -46,6 +46,24 @@ FIELDS
   collective = a group promises ("Let's...", "We'll...") with a concrete action.
   acceptance = someone agrees to a request ("Sure, I'll...", "Yes, I'll...", "I can...").
 
+OWNER ASSIGNMENT RULES (CRITICAL)
+For EXPLICIT commitments ("I'll", "Sure, I'll"):
+- Owner = speaker name (first person committing)
+- Example: "Rahul: I'll send the report by Monday" → owner="Rahul"
+
+For COLLECTIVE commitments ("Let's", "We'll"):
+- IF a person is NAMED IN THE PHRASE → owner = that named person
+  - Example: "Priya: Let's have Vikram validate the numbers" → owner="Vikram"
+- IF NO person is NAMED IN THE PHRASE → owner = "Unassigned"
+  - Example: "Ananya: We'll finalize the checklist tomorrow" → owner="Unassigned"
+  - CRITICAL: NEVER use the speaker's name for an unassigned collective commitment. The speaker is proposing, not committing their own work.
+  - WRONG: "Ananya: Let's finalize" → owner="Ananya" (incorrect—Ananya is speaking for the group, not committing personally)
+  - RIGHT: "Ananya: Let's finalize" → owner="Unassigned" (correct—the team is responsible, no individual named)
+
+For ACCEPTANCE commitments ("Sure, I'll", "Yes, I'll", "I can"):
+- Owner = speaker name (person accepting the request)
+- Example: "Vikram: Sure, I'll prepare the deck by Friday" → owner="Vikram"
+
 EDGE CASES
 - Date plus condition: "I can review them by Friday if I get them by Thursday" = due_date "by Friday", dependency "receives them by Thursday", confidence "low".
 - Reply to a request: "Can someone check the numbers?" then Rahul: "I can compare them after staging validation." = owner Rahul, acceptance, low, due_date null, dependency "staging validation is done".
@@ -55,6 +73,10 @@ EDGE CASES
 WORKED EXAMPLE
 Transcript line: "Ananya: I'll audit all existing tracking events by Friday."
 Output: [{"owner":"Ananya","description":"Audit all existing tracking events","due_date":"by Friday","source_quote":"I'll audit all existing tracking events by Friday.","confidence":"high","dependency":null,"commitment_type":"explicit"}]
+
+WORKED EXAMPLE 2
+Transcript line: "Priya: We'll have a final review meeting on October 8."
+Output: [{"owner":"Unassigned","description":"Have a final review meeting","due_date":"October 8","source_quote":"We'll have a final review meeting on October 8.","confidence":"medium","dependency":null,"commitment_type":"collective"}]
 
 CONSISTENCY RULES
 - One object per action. If one sentence holds two actions, output two objects with the same quote.

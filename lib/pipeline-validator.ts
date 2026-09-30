@@ -1,17 +1,20 @@
 /**
  * Pipeline Validator: Stage-by-Stage Extraction Validation
- * 
+ *
  * Validates commitment extraction through 5 critical stages:
  * 1. EXTRACTION: Groq API call succeeds, returns valid JSON
  * 2. PARSING: Response schema validates, commitments parseable
  * 3. LINKING: Previous commitments found, matching logic works
  * 4. CONTINUITY: Commitment chains preserved, no duplicates
  * 5. DATABASE: Write succeeds, data retrievable
- * 
+ *
  * Each stage has explicit validation rules tied to invariants.
+ *
+ * Schema note: commitments coming from groq.ts use { owner, description, due_date,
+ * source_quote, confidence, dependency, commitment_type }. Older code used
+ * { action, owner_name, owner_user_id }. The helpers below accept both shapes,
+ * so a missing field can never crash a stage.
  */
-
-import { validateCommitmentInvariants } from "./tests/regression-test-harness";
 
 export type PipelineStage =
   | "EXTRACTION"
@@ -55,22 +58,30 @@ export type StageContext = {
   database_writes?: any[];
 };
 
+// ---------------------------------------------------------------------------
+// Safe field helpers (accept both the new and the old commitment shape)
+// ---------------------------------------------------------------------------
+const actionOf = (c: any): string => {
+  const v = c?.description ?? c?.action;
+  return typeof v === "string" ? v : "";
+};
+
+const ownerOf = (c: any): string => {
+  const v = c?.owner ?? c?.owner_name;
+  return typeof v === "string" ? v : "";
+};
+
+const short = (s: string, n = 30): string => (s || "").substring(0, n);
+
 /**
  * STAGE 1: EXTRACTION
- * 
- * Validates that Groq API call succeeded and returned valid response.
- * 
- * Invariants: None directly (Groq is AI responsibility)
- * Errors: API failure, timeout, invalid response format
+ * Validates that the Groq call succeeded and returned a valid response.
  */
-export function validateExtraction(
-  context: StageContext
-): ValidationResult {
+export function validateExtraction(context: StageContext): ValidationResult {
   const startTime = performance.now();
   const errors: PipelineError[] = [];
   const warnings: PipelineWarning[] = [];
 
-  // Check 1: Response exists
   if (!context.extraction_response) {
     errors.push({
       code: "EXTRACTION_NO_RESPONSE",
@@ -79,11 +90,7 @@ export function validateExtraction(
     });
   }
 
-  // Check 2: Response is valid object
-  if (
-    context.extraction_response &&
-    typeof context.extraction_response !== "object"
-  ) {
+  if (context.extraction_response && typeof context.extraction_response !== "object") {
     errors.push({
       code: "EXTRACTION_INVALID_TYPE",
       message: `Expected object, got ${typeof context.extraction_response}`,
@@ -91,7 +98,6 @@ export function validateExtraction(
     });
   }
 
-  // Check 3: Has commitments array
   if (context.extraction_response && !Array.isArray(context.extraction_response.commitments)) {
     errors.push({
       code: "EXTRACTION_NO_COMMITMENTS_ARRAY",
@@ -100,7 +106,6 @@ export function validateExtraction(
     });
   }
 
-  // Check 4: Commitments array not empty (warning if so, not error)
   if (
     context.extraction_response?.commitments &&
     context.extraction_response.commitments.length === 0
@@ -113,7 +118,6 @@ export function validateExtraction(
     });
   }
 
-  // Check 5: Meeting ID provided
   if (!context.meeting_id) {
     errors.push({
       code: "EXTRACTION_NO_MEETING_ID",
@@ -122,7 +126,6 @@ export function validateExtraction(
     });
   }
 
-  // Check 6: User ID provided
   if (!context.user_id) {
     errors.push({
       code: "EXTRACTION_NO_USER_ID",
@@ -131,7 +134,6 @@ export function validateExtraction(
     });
   }
 
-  // Check 7: Meeting date valid (ISO string)
   if (context.meeting_date && !/^\d{4}-\d{2}-\d{2}$/.test(context.meeting_date)) {
     errors.push({
       code: "EXTRACTION_INVALID_DATE",
@@ -140,22 +142,18 @@ export function validateExtraction(
     });
   }
 
-  const duration = performance.now() - startTime;
-
   return {
     stage: "EXTRACTION",
     passed: errors.length === 0,
     errors,
     warnings,
-    duration_ms: duration,
+    duration_ms: performance.now() - startTime,
   };
 }
 
 /**
  * STAGE 2: PARSING
- * 
- * Validates that extracted commitments conform to schema.
- * 
+ * Validates that extracted commitments conform to the schema.
  * Invariants: #1 (owner required), #3 (action+date required)
  */
 export function validateParsing(context: StageContext): ValidationResult {
@@ -184,7 +182,6 @@ export function validateParsing(context: StageContext): ValidationResult {
   for (let i = 0; i < commitments.length; i++) {
     const commit = commitments[i];
 
-    // Check: Owner required (from Groq extraction)
     if (!commit.owner || typeof commit.owner !== "string" || commit.owner.trim() === "") {
       errors.push({
         code: "PARSING_MISSING_OWNER",
@@ -195,7 +192,6 @@ export function validateParsing(context: StageContext): ValidationResult {
       continue;
     }
 
-    // Check: Description required (from Groq extraction)
     if (!commit.description || typeof commit.description !== "string" || commit.description.trim() === "") {
       errors.push({
         code: "PARSING_MISSING_DESCRIPTION",
@@ -206,7 +202,6 @@ export function validateParsing(context: StageContext): ValidationResult {
       continue;
     }
 
-    // Check: Source quote required (from Groq extraction)
     if (!commit.source_quote || typeof commit.source_quote !== "string" || commit.source_quote.trim() === "") {
       errors.push({
         code: "PARSING_MISSING_SOURCE",
@@ -217,7 +212,6 @@ export function validateParsing(context: StageContext): ValidationResult {
       continue;
     }
 
-    // Check: Due date if provided (optional, from Groq extraction)
     if (commit.due_date) {
       if (typeof commit.due_date !== "string") {
         errors.push({
@@ -229,7 +223,6 @@ export function validateParsing(context: StageContext): ValidationResult {
         continue;
       }
     } else {
-      // No deadline is OK (ongoing commitment)
       warnings.push({
         code: "PARSING_NO_DEADLINE",
         message: `Commitment ${i}: No due date (ongoing commitment)`,
@@ -237,7 +230,6 @@ export function validateParsing(context: StageContext): ValidationResult {
       });
     }
 
-    // Check: Confidence is valid (optional, from Groq extraction)
     if (commit.confidence && !["high", "medium", "low"].includes(commit.confidence)) {
       warnings.push({
         code: "PARSING_INVALID_CONFIDENCE",
@@ -246,11 +238,9 @@ export function validateParsing(context: StageContext): ValidationResult {
       });
     }
 
-    // If all critical checks pass, add to parsed list
     context.parsed_commitments.push(commit);
   }
 
-  // Check: At least some commitments parsed successfully
   if (context.parsed_commitments.length === 0 && commitments.length > 0) {
     errors.push({
       code: "PARSING_ALL_FAILED",
@@ -259,23 +249,18 @@ export function validateParsing(context: StageContext): ValidationResult {
     });
   }
 
-  const duration = performance.now() - startTime;
-
   return {
     stage: "PARSING",
     passed: errors.length === 0,
     errors,
     warnings,
-    duration_ms: duration,
+    duration_ms: performance.now() - startTime,
   };
 }
 
 /**
  * STAGE 3: LINKING
- * 
- * Validates that commitment linker can find previous commitments
- * and that matching logic produces sensible results.
- * 
+ * Validates that commitments are suitable for cross-meeting matching.
  * Invariants: #5 (no false merges, confidence check)
  */
 export function validateLinking(context: StageContext): ValidationResult {
@@ -300,49 +285,41 @@ export function validateLinking(context: StageContext): ValidationResult {
 
   context.linked_commitments = [];
 
-  // In a real scenario, would query database for previous commitments
-  // For now, validate that the linker CAN be called without error
   for (const commit of context.parsed_commitments) {
-    // Validate: Owner must have stable ID for linking
+    const action = actionOf(commit);
+
     if (!commit.owner_user_id) {
       warnings.push({
         code: "LINKING_NO_OWNER_UUID",
-        message: `Commitment "${commit.action.substring(0, 30)}" has no owner_user_id`,
+        message: `Commitment "${short(action)}" has no owner_user_id`,
         suggestion:
           "Owner will be matched by name, which is less reliable. Consider capturing speaker UUID.",
       });
     }
 
-    // Validate: Action description reasonable for matching
-    if (commit.action.length < 5) {
+    if (action.length < 5) {
       warnings.push({
         code: "LINKING_SHORT_ACTION",
-        message: `Commitment action is very short: "${commit.action}"`,
+        message: `Commitment action is very short: "${action}"`,
         suggestion: "Short actions may not match reliably across meetings",
       });
     }
 
-    // Valid for linking
     context.linked_commitments.push(commit);
   }
-
-  const duration = performance.now() - startTime;
 
   return {
     stage: "LINKING",
     passed: errors.length === 0,
     errors,
     warnings,
-    duration_ms: duration,
+    duration_ms: performance.now() - startTime,
   };
 }
 
 /**
  * STAGE 4: CONTINUITY
- * 
- * Validates that commitment chains are preserved correctly
- * and no duplicates are created.
- * 
+ * Validates that commitment chains are preserved and no duplicates are created.
  * Invariants: #4 (ONE chain per original), #6 (status lifecycle)
  */
 export function validateContinuity(context: StageContext): ValidationResult {
@@ -368,9 +345,20 @@ export function validateContinuity(context: StageContext): ValidationResult {
   context.continuity_chains = [];
   const seenChainIds = new Set<string>();
   const seenOwnerActions = new Set<string>();
+  const validStatuses = [
+    "EXTRACTED",
+    "OPEN",
+    "IN_PROGRESS",
+    "BLOCKED",
+    "RESCHEDULED",
+    "DONE",
+    "COMPLETED",
+    "OVERDUE",
+  ];
 
   for (const commit of context.linked_commitments) {
-    // Check: commitment_id is stable UUID (for updates)
+    const action = actionOf(commit);
+
     if (commit.commitment_id && !/^[a-f0-9\-]{36}$/.test(commit.commitment_id)) {
       errors.push({
         code: "CONTINUITY_INVALID_UUID",
@@ -382,7 +370,6 @@ export function validateContinuity(context: StageContext): ValidationResult {
       continue;
     }
 
-    // Check: No duplicate chains (Invariant #4)
     if (commit.commitment_id && seenChainIds.has(commit.commitment_id)) {
       errors.push({
         code: "CONTINUITY_DUPLICATE_CHAIN",
@@ -398,34 +385,26 @@ export function validateContinuity(context: StageContext): ValidationResult {
       seenChainIds.add(commit.commitment_id);
     }
 
-    // Check: No duplicate (owner, action) pairs in same batch
-    const ownerAction = `${commit.owner_user_id || commit.owner_name}|${commit.action}`;
+    const ownerKey = commit.owner_user_id || ownerOf(commit);
+    const ownerAction = `${ownerKey}|${action}`;
     if (seenOwnerActions.has(ownerAction)) {
       warnings.push({
         code: "CONTINUITY_POTENTIAL_DUPLICATE",
-        message: `Same owner + action appears multiple times in batch: ${commit.owner_name || commit.owner_user_id} - "${commit.action.substring(0, 30)}"`,
+        message: `Same owner + action appears multiple times in batch: ${ownerOf(commit) || commit.owner_user_id} - "${short(action)}"`,
         suggestion:
           "Verify this is intentional (e.g., same task assigned to multiple people)",
       });
     }
     seenOwnerActions.add(ownerAction);
 
-    // Check: Status is valid (Invariant #6)
     if (commit.status) {
-      const validStatuses = [
-        "EXTRACTED",
-        "OPEN",
-        "IN_PROGRESS",
-        "BLOCKED",
-        "RESCHEDULED",
-        "DONE",
-      ];
-      if (!validStatuses.includes(commit.status)) {
+      const normalized = String(commit.status).toUpperCase().replace(/[\s-]+/g, "_");
+      if (!validStatuses.includes(normalized)) {
         errors.push({
           code: "CONTINUITY_INVALID_STATUS",
           invariant: 6,
-          message: `Invalid status "${commit.status}" for commitment: ${commit.action.substring(0, 30)}`,
-          recoverable: true, // Can default to EXTRACTED
+          message: `Invalid status "${commit.status}" for commitment: ${short(action)}`,
+          recoverable: true,
         });
         continue;
       }
@@ -434,7 +413,6 @@ export function validateContinuity(context: StageContext): ValidationResult {
     context.continuity_chains.push(commit);
   }
 
-  // Check: At least some commitments passed continuity validation
   if (context.continuity_chains.length === 0 && context.linked_commitments.length > 0) {
     errors.push({
       code: "CONTINUITY_ALL_FAILED",
@@ -443,23 +421,18 @@ export function validateContinuity(context: StageContext): ValidationResult {
     });
   }
 
-  const duration = performance.now() - startTime;
-
   return {
     stage: "CONTINUITY",
     passed: errors.length === 0,
     errors,
     warnings,
-    duration_ms: duration,
+    duration_ms: performance.now() - startTime,
   };
 }
 
 /**
  * STAGE 5: DATABASE
- * 
- * Validates that data can be written to database without error.
- * This is the final stage before commit.
- * 
+ * Validates that data can be written without error.
  * Invariants: #8 (no silent drops), #10 (evidence preservation)
  */
 export function validateDatabase(context: StageContext): ValidationResult {
@@ -485,22 +458,31 @@ export function validateDatabase(context: StageContext): ValidationResult {
   context.database_writes = [];
 
   for (const commit of context.continuity_chains) {
-    // Check: All required fields for database write
-    const requiredFields = ["owner_user_id", "action"];
-    for (const field of requiredFields) {
-      if (!commit[field]) {
-        errors.push({
-          code: `DATABASE_MISSING_${field.toUpperCase()}`,
-          invariant: 8,
-          message: `Cannot write commitment without ${field}`,
-          context: { commitment: commit },
-          recoverable: false,
-        });
-        continue;
-      }
+    let writable = true;
+
+    // Owner identity: a user id, or the name that was extracted from the transcript
+    if (!(commit.owner_user_id || ownerOf(commit))) {
+      errors.push({
+        code: "DATABASE_MISSING_OWNER_USER_ID",
+        invariant: 8,
+        message: "Cannot write commitment without owner_user_id",
+        context: { commitment: commit },
+        recoverable: false,
+      });
+      writable = false;
     }
 
-    // Check: Meeting reference preserved (Invariant #10)
+    if (!actionOf(commit)) {
+      errors.push({
+        code: "DATABASE_MISSING_ACTION",
+        invariant: 8,
+        message: "Cannot write commitment without action",
+        context: { commitment: commit },
+        recoverable: false,
+      });
+      writable = false;
+    }
+
     if (!context.meeting_id) {
       errors.push({
         code: "DATABASE_NO_MEETING_ID",
@@ -508,10 +490,9 @@ export function validateDatabase(context: StageContext): ValidationResult {
         message: "Cannot write commitment without meeting_id (evidence link)",
         recoverable: false,
       });
-      continue;
+      writable = false;
     }
 
-    // Check: User ownership verified
     if (!context.user_id) {
       errors.push({
         code: "DATABASE_NO_USER_ID",
@@ -519,26 +500,26 @@ export function validateDatabase(context: StageContext): ValidationResult {
         message: "Cannot write commitment without user_id (ownership)",
         recoverable: false,
       });
-      continue;
+      writable = false;
     }
 
-    // All checks passed, ready for write
+    if (!writable) continue;
+
     context.database_writes.push({
       meeting_id: context.meeting_id,
       user_id: context.user_id,
       commitment_id: commit.commitment_id || `temp-${Math.random()}`,
       owner_user_id: commit.owner_user_id,
-      owner_name: commit.owner_name,
-      action: commit.action,
-      due_date_expression: commit.due_date_expression,
+      owner_name: ownerOf(commit),
+      action: actionOf(commit),
+      due_date_expression: commit.due_date_expression ?? commit.due_date,
       resolved_due_date: commit.resolved_due_date,
-      blocker: commit.blocker,
+      blocker: commit.blocker ?? commit.dependency,
       status: commit.status || "EXTRACTED",
       extracted_at: new Date().toISOString(),
     });
   }
 
-  // Validation: At least some writes prepared
   if (context.database_writes.length === 0 && context.continuity_chains.length > 0) {
     errors.push({
       code: "DATABASE_NO_WRITES_PREPARED",
@@ -548,14 +529,12 @@ export function validateDatabase(context: StageContext): ValidationResult {
     });
   }
 
-  const duration = performance.now() - startTime;
-
   return {
     stage: "DATABASE",
     passed: errors.length === 0,
     errors,
     warnings,
-    duration_ms: duration,
+    duration_ms: performance.now() - startTime,
   };
 }
 
@@ -572,70 +551,43 @@ export function validatePipeline(context: StageContext): {
   const stages: ValidationResult[] = [];
   let totalDuration = 0;
 
-  // Stage 1: Extraction
+  const fail = (result: ValidationResult) => ({
+    stages,
+    overall_passed: false,
+    total_duration_ms: totalDuration,
+    error_count: result.errors.length,
+    warning_count: result.warnings.length,
+  });
+
+  // Stage 1: Extraction (stop if it fails)
   let result = validateExtraction(context);
   stages.push(result);
   totalDuration += result.duration_ms;
-  if (!result.passed) {
-    // Stop pipeline if extraction failed
-    return {
-      stages,
-      overall_passed: false,
-      total_duration_ms: totalDuration,
-      error_count: result.errors.length,
-      warning_count: result.warnings.length,
-    };
-  }
+  if (!result.passed) return fail(result);
 
-  // Stage 2: Parsing
+  // Stage 2: Parsing (stop if it fails)
   result = validateParsing(context);
   stages.push(result);
   totalDuration += result.duration_ms;
-  if (!result.passed) {
-    return {
-      stages,
-      overall_passed: false,
-      total_duration_ms: totalDuration,
-      error_count: result.errors.length,
-      warning_count: result.warnings.length,
-    };
-  }
+  if (!result.passed) return fail(result);
 
-  // Stage 3: Linking
+  // Stage 3: Linking (warnings never stop the pipeline)
   result = validateLinking(context);
   stages.push(result);
   totalDuration += result.duration_ms;
-  // Linking warnings don't stop pipeline
 
   // Stage 4: Continuity
   result = validateContinuity(context);
   stages.push(result);
   totalDuration += result.duration_ms;
-  if (!result.passed) {
-    return {
-      stages,
-      overall_passed: false,
-      total_duration_ms: totalDuration,
-      error_count: result.errors.length,
-      warning_count: result.warnings.length,
-    };
-  }
+  if (!result.passed) return fail(result);
 
   // Stage 5: Database
   result = validateDatabase(context);
   stages.push(result);
   totalDuration += result.duration_ms;
-  if (!result.passed) {
-    return {
-      stages,
-      overall_passed: false,
-      total_duration_ms: totalDuration,
-      error_count: result.errors.length,
-      warning_count: result.warnings.length,
-    };
-  }
+  if (!result.passed) return fail(result);
 
-  // All stages passed
   const totalErrors = stages.reduce((sum, s) => sum + s.errors.length, 0);
   const totalWarnings = stages.reduce((sum, s) => sum + s.warnings.length, 0);
 

@@ -2,9 +2,14 @@
   command = "npx next build"
   publish = ".next"
 
-# Exclude NEXT_PUBLIC_ keys from secrets scanning (they're meant to be public)
+# Set environment variables during build (use Netlify UI to set secrets)
+# These will be populated from Netlify Environment Variables
 [build.environment]
   SECRETS_SCAN_OMIT_KEYS = "NEXT_PUBLIC_SUPABASE_ANON_KEY,NEXT_PUBLIC_SUPABASE_URL"
+  # The following are pulled from Netlify's environment variable UI:
+  # - NEXT_PUBLIC_SUPABASE_URL
+  # - NEXT_PUBLIC_SUPABASE_ANON_KEY
+  # - GROQ_API_KEY
 
 [[plugins]]
   package = "@netlify/plugin-nextjs"

@@ -198,13 +198,17 @@ export async function callGroqForExtraction(
 ): Promise<ExtractedCommitment[]> {
   const apiKey = process.env.GROQ_API_KEY;
   if (!apiKey) {
+    console.error('[GROQ] GROQ_API_KEY environment variable is not set!');
     throw new Error('GROQ_API_KEY is not configured.');
   }
+
+  console.log('[GROQ] Starting extraction with API key present');
 
   // [EXTRACTION DEBUG] Log the meeting date for context
   const debugMeetingDate = meetingDate || new Date();
   console.log('[EXTRACTION DEBUG] Meeting Date:', debugMeetingDate.toISOString().split('T')[0], `(${debugMeetingDate.toLocaleDateString('en-US', { weekday: 'long' })})`);
 
+  console.log('[GROQ] Sending request to Groq API...');
   const response = await fetch(
     'https://api.groq.com/openai/v1/chat/completions',
     {
@@ -214,7 +218,7 @@ export async function callGroqForExtraction(
         Authorization: `Bearer ${apiKey}`,
       },
       body: JSON.stringify({
-        model: 'openai/gpt-oss-120b', // Using the largest available model
+        model: 'mixtral-8x7b-32768', // Changed to more stable model
         max_tokens: 4096,
         messages: [
           { role: 'system', content: buildSystemPrompt(meetingDate) },
@@ -223,17 +227,21 @@ export async function callGroqForExtraction(
             content: `Extract commitments from this meeting transcript:\n\n${transcript}\n\nReturn ONLY valid JSON array, no explanations.`
           },
         ],
-        temperature: 0.2, // Lower temperature for more consistent output
+        temperature: 0.2,
       }),
     },
   );
 
+  console.log('[GROQ] Response status:', response.status);
+
   if (!response.ok) {
     const errText = await response.text();
-    throw new Error(`Groq API error (${response.status}): ${errText}`);
+    console.error('[GROQ] API error response:', errText);
+    throw new Error(`Groq API error (${response.status}): ${errText.substring(0, 200)}`);
   }
 
   const data = await response.json();
+  console.log('[GROQ] Response received, parsing...');
   
   if (!data.choices || !Array.isArray(data.choices) || data.choices.length === 0) {
     console.error('[EXTRACTION DEBUG] Invalid Groq response structure:', JSON.stringify(data).substring(0, 500));

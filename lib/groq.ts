@@ -237,7 +237,12 @@ export async function callGroqForExtraction(
   const text: string = data.choices?.[0]?.message?.content ?? '';
   
   // [EXTRACTION DEBUG] Log the raw Groq response
-  console.log('[EXTRACTION DEBUG] Raw Groq Response:', text.substring(0, 1500));
+  if (text) {
+    console.log('[EXTRACTION DEBUG] Raw Groq Response:', text.substring(0, 1500));
+  } else {
+    console.log('[EXTRACTION DEBUG] Empty response from Groq. Full response:', JSON.stringify(data));
+    throw new Error('Groq API returned empty content');
+  }
 
   const commitments = parseCommitments(text, meetingDate);
   

@@ -218,7 +218,7 @@ export async function callGroqForExtraction(
         Authorization: `Bearer ${apiKey}`,
       },
       body: JSON.stringify({
-        model: 'mixtral-8x7b-32768', // Changed to more stable model
+        model: 'llama-3.1-70b-versatile', // Currently supported fast model
         max_tokens: 4096,
         messages: [
           { role: 'system', content: buildSystemPrompt(meetingDate) },
@@ -308,7 +308,7 @@ The message should be warm but clear, ready to send via Slack or email. Do not i
         Authorization: `Bearer ${apiKey}`,
       },
       body: JSON.stringify({
-        model: 'openai/gpt-oss-20b',
+        model: 'llama-3.1-8b-instant',
         max_tokens: 256,
         messages: [{ role: 'user', content: prompt }],
         temperature: 0.7,

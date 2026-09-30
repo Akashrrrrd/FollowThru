@@ -294,8 +294,8 @@ export function resolveDateExpression(
   }
 
   // Handle month names with "by" prefix (e.g., "by October 15", "by December 25")
-  // Supports: "by Month Day", "by October 15", "by December 25"
-  const monthNameMatch = normalized.match(/^(?:by|before)?\s*(january|february|march|april|may|june|july|august|september|october|november|december)\s+(\d{1,2})$/);
+  // Supports: "by Month Day", "by October 15", "by December 25", "Friday, October 5", "October 7"
+  const monthNameMatch = normalized.match(/^(?:by|before)?\s*(?:(?:monday|tuesday|wednesday|thursday|friday|saturday|sunday),?\s*)?(january|february|march|april|may|june|july|august|september|october|november|december)\s+(\d{1,2})$/);
   if (monthNameMatch) {
     const monthName = monthNameMatch[1];
     const day = parseInt(monthNameMatch[2], 10);

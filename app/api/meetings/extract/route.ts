@@ -193,13 +193,14 @@ export async function POST(req: NextRequest) {
           let resolvedDate = c.due_date;
           
           // If AI returned a relative expression instead of a date, resolve it now
-          if (c.due_date_expression && !/^\d{4}-\d{2}-\d{2}$/.test(c.due_date_expression)) {
+          // Note: c.due_date contains the expression from Groq (e.g., "by Friday", "tomorrow", null)
+          if (c.due_date && !/^\d{4}-\d{2}-\d{2}$/.test(c.due_date)) {
             // Check if it's a dependency expression (should remain null)
-            if (isDependencyExpression(c.due_date_expression)) {
+            if (isDependencyExpression(c.due_date)) {
               resolvedDate = null;
             } else {
               // Try to resolve the relative date expression
-              const resolved = resolveDateExpression(c.due_date_expression, meetingDate);
+              const resolved = resolveDateExpression(c.due_date, meetingDate);
               resolvedDate = resolved || null; // Use resolved date or null if unresolvable
             }
           }

@@ -234,15 +234,21 @@ export async function callGroqForExtraction(
   }
 
   const data = await response.json();
-  const text: string = data.choices?.[0]?.message?.content ?? '';
+  
+  if (!data.choices || !Array.isArray(data.choices) || data.choices.length === 0) {
+    console.error('[EXTRACTION DEBUG] Invalid Groq response structure:', JSON.stringify(data).substring(0, 500));
+    throw new Error(`Groq API returned invalid structure: ${JSON.stringify(data).substring(0, 200)}`);
+  }
+  
+  const text: string = data.choices[0]?.message?.content;
+  
+  if (!text || typeof text !== 'string') {
+    console.error('[EXTRACTION DEBUG] No content in Groq response. Full response:', JSON.stringify(data).substring(0, 500));
+    throw new Error('Groq API returned empty or invalid content field');
+  }
   
   // [EXTRACTION DEBUG] Log the raw Groq response
-  if (text) {
-    console.log('[EXTRACTION DEBUG] Raw Groq Response:', text.substring(0, 1500));
-  } else {
-    console.log('[EXTRACTION DEBUG] Empty response from Groq. Full response:', JSON.stringify(data));
-    throw new Error('Groq API returned empty content');
-  }
+  console.log('[EXTRACTION DEBUG] Raw Groq Response:', text.substring(0, 1500));
 
   const commitments = parseCommitments(text, meetingDate);
   

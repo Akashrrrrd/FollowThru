@@ -1,10 +1,8 @@
 # FollowThru: AI Commitment Accountability System
 
-> **Turn meeting promises into measurable follow-through**
-
 FollowThru is an intelligent commitment accountability platform that automatically extracts meeting promises, tracks ownership, identifies blockers, and measures follow-through rates—creating accountability without manual overhead.
 
-## 🎯 Problem Statement
+## Problem Statement
 
 Meeting commitments get lost. Teams forget who promised what. Deadlines slip. Accountability disappears between meetings.
 
@@ -13,29 +11,29 @@ Meeting commitments get lost. Teams forget who promised what. Deadlines slip. Ac
 - Managers have no visibility into blockers
 - Follow-through rates are completely unknown
 
-## ✨ Solution: FollowThru
+## Solution
 
-**AI-powered commitment extraction + accountability tracking + follow-through analytics**
+AI-powered commitment extraction combined with accountability tracking and follow-through analytics.
 
-## 🚀 Key Features
+## Key Features
 
-### 1. 🤖 AI Commitment Extraction
+### AI Commitment Extraction
 - Automatically processes meeting transcripts
 - Identifies real commitments (not just action items)
 - Distinguishes commitment types:
-  - **Explicit:** "I'll send the report by Friday" (High confidence)
-  - **Collective:** "Let's launch next week" (Medium confidence)
-  - **Tentative:** "We could try this" (Low confidence, needs review)
+  - Explicit: "I'll send the report by Friday" (High confidence)
+  - Collective: "Let's launch next week" (Medium confidence)
+  - Tentative: "We could try this" (Low confidence, needs review)
 - Extracts: owner, description, due date, confidence level, dependencies
 
-### 2. 📋 Intelligent Review Workflow
+### Intelligent Review Workflow
 - Post-extraction review interface for low-confidence items
 - Confidence badges (High/Medium/Low)
 - Inline source quote evidence
 - Approve/Edit/Reject per commitment
 - Bulk approve high-confidence items
 
-### 3. ⏰ Smart Date Resolution
+### Smart Date Resolution
 - Natural language date parsing:
   - "by Friday" → Next Friday
   - "in 2 weeks" → Exact date
@@ -43,28 +41,28 @@ Meeting commitments get lost. Teams forget who promised what. Deadlines slip. Ac
   - "October 15" / "10/20" → Month-name and numeric formats
   - "after project X completes" → Dependency tracking
 - Handles arbitrary date formats reliably
-- 80/80 tests validating all date patterns
+- 80 tests validating all date patterns
 
-### 4. 🔗 Dependency & Blocker Tracking
-- **Auto-detect dependencies:** Identifies blocking relationships
-- **Manual blocker tracking:** Add/edit blocker reasons
-- **Visual indicators:** Blocker status on commitments
-- **Blocked status:** Full lifecycle tracking
+### Dependency & Blocker Tracking
+- Auto-detect dependencies: Identifies blocking relationships
+- Manual blocker tracking: Add/edit blocker reasons
+- Visual indicators: Blocker status on commitments
+- Blocked status: Full lifecycle tracking
 
-### 5. 📊 Commitment Lifecycle
-- Status workflow: `Open` → `In Progress` → `Blocked` → `Completed` or `Overdue`
+### Commitment Lifecycle
+- Status workflow: Open → In Progress → Blocked → Completed or Overdue
 - Automatic overdue detection
 - Status change history (audit trail)
 - Completed date recording
 
-### 6. 👤 Personal Accountability Dashboard
+### Personal Accountability Dashboard
 - Individual task summary
 - Commitments I made / Due this week / Overdue / Blocked
 - Personal completion rate trending
 - Follow-through metrics per person
 - Filtering by owner, status, confidence level
 
-### 7. 📈 Meeting Intelligence
+### Meeting Intelligence
 - Cross-meeting commitment linking
 - Commitment update detection
 - Meeting summary showing:
@@ -73,7 +71,7 @@ Meeting commitments get lost. Teams forget who promised what. Deadlines slip. Ac
   - Dependencies identified
   - Items needing review
 
-### 8. 🚨 Needs Attention Dashboard
+### Needs Attention Dashboard
 Highlights action items requiring attention:
 - Due Today
 - Due Soon / This Week
@@ -81,33 +79,33 @@ Highlights action items requiring attention:
 - Blocked
 - Needs Review
 
-### 9. 🔐 Multi-User Data Isolation
+### Multi-User Data Isolation
 - Hermetically sealed user data (no cross-user access)
 - Query validation prevents data leakage
 - Resource ownership checks before access
 - 16 security tests validating isolation
 
-### 10. 📅 Carried-Over Commitments
+### Carried-Over Commitments
 - Auto-detect commitments not completed in previous period
 - Visible on dashboard with original vs carried due date
 - Metrics on carry-over rate
 
-## 🛠 Tech Stack
+## Technology Stack
 
 | Component | Technology |
 |-----------|-----------|
-| **Frontend** | Next.js 13, React 18, TypeScript |
-| **Styling** | Tailwind CSS, Shadcn/UI Components |
-| **Backend** | Next.js API Routes |
-| **Database** | Supabase (PostgreSQL) |
-| **AI/LLM** | Groq API |
-| **Authentication** | Supabase Auth (Google OAuth) |
-| **Testing** | Jest (319 tests) |
-| **Charts** | Recharts |
-| **Form Handling** | React Hook Form + Zod |
-| **Deployment** | Netlify |
+| Frontend | Next.js 13, React 18, TypeScript |
+| Styling | Tailwind CSS, Shadcn/UI Components |
+| Backend | Next.js API Routes |
+| Database | Supabase (PostgreSQL) |
+| AI/LLM | Groq API |
+| Authentication | Supabase Auth (Google OAuth) |
+| Testing | Jest (319 tests) |
+| Charts | Recharts |
+| Form Handling | React Hook Form + Zod |
+| Deployment | Vercel |
 
-## 📦 Getting Started
+## Getting Started
 
 ### Prerequisites
 - Node.js 18+
@@ -148,7 +146,7 @@ GROQ_API_KEY=your_groq_api_key
 npm run dev
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser.
+Open http://localhost:3000 with your browser.
 
 ### Build for Production
 
@@ -164,24 +162,24 @@ npm test              # Run all tests
 npm run test:watch   # Watch mode
 ```
 
-## 📊 Quality Metrics
+## Quality Metrics
 
-### Test Coverage: 319 Tests ✅
+### Test Coverage: 319 Tests
 
-- **80 Date Resolver Tests** - All date formats validated
-- **16 User Isolation Tests** - Zero cross-user data leakage
-- **13 Conflict Detector Tests** - Duplicates, false merges detected
-- **212 Regression Tests** - 11 business domains, 4 continuity scenarios
-- **23 Pipeline Validator Tests** - 5 extraction stages validated
+- 80 Date Resolver Tests - All date formats validated
+- 16 User Isolation Tests - Zero cross-user data leakage
+- 13 Conflict Detector Tests - Duplicates, false merges detected
+- 212 Regression Tests - 11 business domains, 4 continuity scenarios
+- 23 Pipeline Validator Tests - 5 extraction stages validated
 
 ### Build Status
 
-- ✅ 0 TypeScript errors
-- ✅ Production-ready build
-- ✅ 100% test coverage on critical paths
-- ✅ Ready for hackathon deployment
+- 0 TypeScript errors
+- Production-ready build
+- 100% test coverage on critical paths
+- Ready for deployment
 
-## 📁 Project Structure
+## Project Structure
 
 ```
 followthru/
@@ -229,7 +227,7 @@ followthru/
 └── public/                    # Static assets
 ```
 
-## 🔄 How It Works
+## How It Works
 
 ### Step 1: Record Meeting
 Upload meeting transcript (text, audio transcription, or paste)
@@ -249,43 +247,36 @@ Owner marks: In Progress → Blocked → Completed
 ### Step 6: Analyze & Measure
 Dashboard shows completion rates, blockers, team trends
 
-## 🎯 Business Value
+## Business Value
 
 ### For Team Members
-✅ "I know exactly what I committed to"  
-✅ "I have evidence (source quotes) for every promise"  
-✅ "I can see what's blocking my work"  
-✅ "I get AI-powered reminders"  
+- "I know exactly what I committed to"
+- "I have evidence (source quotes) for every promise"
+- "I can see what's blocking my work"
+- "I get AI-powered reminders"
 
 ### For Managers
-✅ "Full visibility: Who committed to what, when"  
-✅ "Real accountability: Follow-through metrics"  
-✅ "Blocker identification: What prevents progress"  
-✅ "Team trends: Commitment patterns over time"  
+- "Full visibility: Who committed to what, when"
+- "Real accountability: Follow-through metrics"
+- "Blocker identification: What prevents progress"
+- "Team trends: Commitment patterns over time"
 
 ### For Organizations
-✅ Increased accountability culture  
-✅ Reduced commitment slippage  
-✅ Better visibility into team capacity & blockers  
-✅ Data-driven improvement in follow-through rates  
+- Increased accountability culture
+- Reduced commitment slippage
+- Better visibility into team capacity & blockers
+- Data-driven improvement in follow-through rates
 
-## 🔐 Security & Privacy
+## Security & Privacy
 
-- **User Data Isolation:** Hermetically sealed (no cross-user access)
-- **Query Validation:** All queries filtered by user_id
-- **Resource Ownership:** Verified before operations
-- **Audit Trail:** Every commitment change logged with timestamp
-- **Multi-tenant Ready:** Enterprise-grade data separation
-- **Tested:** 16 security tests validating isolation
+- User Data Isolation: Hermetically sealed (no cross-user access)
+- Query Validation: All queries filtered by user_id
+- Resource Ownership: Verified before operations
+- Audit Trail: Every commitment change logged with timestamp
+- Multi-tenant Ready: Enterprise-grade data separation
+- Tested: 16 security tests validating isolation
 
-## 🚀 Deployment
-
-### Netlify (Recommended)
-
-```bash
-npm run build
-# Deploy to Netlify
-```
+## Deployment
 
 ### Vercel
 
@@ -300,30 +291,30 @@ docker build -t followthru .
 docker run -p 3000:3000 followthru
 ```
 
-## 📚 API Endpoints
+## API Endpoints
 
 ### Meetings
-- `GET /api/meetings` - List meetings
-- `POST /api/meetings` - Create meeting
-- `GET /api/meetings/[id]` - Get meeting detail
+- GET /api/meetings - List meetings
+- POST /api/meetings - Create meeting
+- GET /api/meetings/[id] - Get meeting detail
 
 ### Commitments (Tasks)
-- `GET /api/tasks` - List commitments
-- `POST /api/tasks` - Create commitment
-- `PATCH /api/tasks/[id]` - Update commitment
-- `GET /api/tasks/[id]` - Get commitment detail
+- GET /api/tasks - List commitments
+- POST /api/tasks - Create commitment
+- PATCH /api/tasks/[id] - Update commitment
+- GET /api/tasks/[id] - Get commitment detail
 
 ### Extraction
-- `POST /api/meetings/extract` - AI extraction
+- POST /api/meetings/extract - AI extraction
 
 ### Insights
-- `GET /api/insights` - Analytics & metrics
+- GET /api/insights - Analytics & metrics
 
 ### Profile
-- `GET /api/profile` - User settings
-- `PATCH /api/profile` - Update profile
+- GET /api/profile - User settings
+- PATCH /api/profile - Update profile
 
-## 🧪 Testing
+## Testing
 
 ```bash
 # Run all tests
@@ -339,18 +330,18 @@ npm run test:watch
 npm test -- --coverage
 ```
 
-## 📝 Key Invariants Validated
+## Key Invariants Validated
 
-✅ All dates resolve deterministically or return null  
-✅ User data hermetically sealed (no cross-user access)  
-✅ Duplicate commitments automatically detected  
-✅ False merges flagged (contradictory ownership/dates)  
-✅ Orphaned tasks (missing meeting refs) identified  
-✅ Meeting ownership verified before task operations  
-✅ Invalid dates rejected (Feb 30, etc.)  
-✅ Resource ownership enforced on all queries  
+- All dates resolve deterministically or return null
+- User data hermetically sealed (no cross-user access)
+- Duplicate commitments automatically detected
+- False merges flagged (contradictory ownership/dates)
+- Orphaned tasks (missing meeting refs) identified
+- Meeting ownership verified before task operations
+- Invalid dates rejected (Feb 30, etc.)
+- Resource ownership enforced on all queries
 
-## 🎓 Sample Output
+## Sample Output
 
 **Input Meeting Transcript:**
 ```
@@ -378,30 +369,30 @@ Commitment 2:
   Dependency: "Receive assets from Sarah"
 ```
 
-## 🤝 Contributing
+## Contributing
 
-Contributions are welcome! Please feel free to submit a Pull Request.
+Contributions are welcome. Please feel free to submit a Pull Request.
 
-## 📄 License
+## License
 
 MIT License - see LICENSE file for details
 
-## 🎯 Roadmap
+## Roadmap
 
-- ✅ **Phase 1:** Foundation (commitment model, AI extraction)
-- ✅ **Phase 2:** Core features (review UI, dashboard, lifecycle)
-- ✅ **Phase 3:** Hardening (testing, validation, security)
-- 🚧 **Phase 4:** Advanced Analytics (dependency graphs, insights)
-- 📋 **Phase 5:** Team Features (accountability dashboards, reports)
+- Phase 1: Foundation (commitment model, AI extraction)
+- Phase 2: Core features (review UI, dashboard, lifecycle)
+- Phase 3: Hardening (testing, validation, security)
+- Phase 4: Advanced Analytics (dependency graphs, insights)
+- Phase 5: Team Features (accountability dashboards, reports)
 
-## 💬 Support
+## Support
 
 For questions or issues:
 - Open an issue on GitHub
 - Check existing documentation
 - Review test files for usage examples
 
-## 🙏 Acknowledgments
+## Acknowledgments
 
 - Built with Next.js and React
 - AI powered by Groq
@@ -409,7 +400,5 @@ For questions or issues:
 - UI components from Shadcn
 
 ---
-
-**Ready to turn meeting promises into accountable follow-through?** 🚀
 
 **Repository:** https://github.com/Akashrrrrd/FollowThru.git

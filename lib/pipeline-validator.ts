@@ -184,83 +184,68 @@ export function validateParsing(context: StageContext): ValidationResult {
   for (let i = 0; i < commitments.length; i++) {
     const commit = commitments[i];
 
-    // Check: Owner identification (Invariant #1)
-    if (!commit.owner_user_id && !commit.owner_name) {
+    // Check: Owner required (from Groq extraction)
+    if (!commit.owner || typeof commit.owner !== "string" || commit.owner.trim() === "") {
       errors.push({
         code: "PARSING_MISSING_OWNER",
-        invariant: 1,
-        message: `Commitment ${i}: Missing owner_user_id and owner_name`,
+        message: `Commitment ${i}: Missing or empty owner`,
         context: { commitment: commit },
-        recoverable: true, // Can use speaker as fallback
+        recoverable: false,
       });
       continue;
     }
 
-    // Check: Action required (Invariant #3)
-    if (!commit.action || typeof commit.action !== "string" || commit.action.trim() === "") {
+    // Check: Description required (from Groq extraction)
+    if (!commit.description || typeof commit.description !== "string" || commit.description.trim() === "") {
       errors.push({
-        code: "PARSING_MISSING_ACTION",
-        invariant: 3,
-        message: `Commitment ${i}: Missing or empty action`,
+        code: "PARSING_MISSING_DESCRIPTION",
+        message: `Commitment ${i}: Missing or empty description`,
         context: { commitment: commit },
-        recoverable: true,
+        recoverable: false,
       });
       continue;
     }
 
-    // Check: Due date expression parseable (Invariant #2)
-    if (commit.due_date_expression) {
-      if (typeof commit.due_date_expression !== "string") {
+    // Check: Source quote required (from Groq extraction)
+    if (!commit.source_quote || typeof commit.source_quote !== "string" || commit.source_quote.trim() === "") {
+      errors.push({
+        code: "PARSING_MISSING_SOURCE",
+        message: `Commitment ${i}: Missing or empty source_quote`,
+        context: { commitment: commit },
+        recoverable: false,
+      });
+      continue;
+    }
+
+    // Check: Due date if provided (optional, from Groq extraction)
+    if (commit.due_date) {
+      if (typeof commit.due_date !== "string") {
         errors.push({
           code: "PARSING_INVALID_DATE_TYPE",
-          invariant: 2,
-          message: `Commitment ${i}: due_date_expression must be string`,
+          message: `Commitment ${i}: due_date must be string`,
           context: { commitment: commit },
-          recoverable: true,
+          recoverable: false,
         });
         continue;
       }
-
-      // Try to parse the expression
-      try {
-        const testDate = new Date(context.meeting_date);
-        // Note: actual resolution happens later in pipeline
-        // Here we just validate it's not empty
-        if (commit.due_date_expression.trim() === "") {
-          warnings.push({
-            code: "PARSING_EMPTY_DATE_EXPRESSION",
-            message: `Commitment ${i}: Empty due_date_expression`,
-            suggestion:
-              "Set explicit deadline or omit for open-ended commitments",
-          });
-        }
-      } catch (e) {
-        errors.push({
-          code: "PARSING_DATE_ERROR",
-          message: `Commitment ${i}: Error processing due_date_expression: ${e}`,
-          recoverable: true,
-        });
-      }
     } else {
-      // Ongoing commitments are OK (no deadline)
+      // No deadline is OK (ongoing commitment)
       warnings.push({
         code: "PARSING_NO_DEADLINE",
         message: `Commitment ${i}: No due date (ongoing commitment)`,
-        suggestion: "If deadline-less, ensure it's intentional",
+        suggestion: "Ongoing commitments are valid",
       });
     }
 
-    // Check: Blocker is documented if present
-    if (commit.blocker && typeof commit.blocker !== "string") {
-      errors.push({
-        code: "PARSING_INVALID_BLOCKER_TYPE",
-        message: `Commitment ${i}: blocker must be string`,
-        recoverable: true,
+    // Check: Confidence is valid (optional, from Groq extraction)
+    if (commit.confidence && !["high", "medium", "low"].includes(commit.confidence)) {
+      warnings.push({
+        code: "PARSING_INVALID_CONFIDENCE",
+        message: `Commitment ${i}: Invalid confidence level, defaulting to medium`,
       });
-      continue;
     }
 
-    // If all checks pass, add to parsed list
+    // If all critical checks pass, add to parsed list
     context.parsed_commitments.push(commit);
   }
 

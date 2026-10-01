@@ -160,3 +160,28 @@ export interface NeedsAttention {
   blocked: Task[];
   needs_review: Task[];
 }
+
+
+// Phase 4.5: Completion Notifications
+export interface CommitmentResponsiblePerson {
+  id: string;
+  taskId: string;
+  name: string;
+  email: string;
+  isFollowthruMember: boolean;
+  userId?: string;
+  createdAt: string;
+}
+
+export interface CompletionNotification {
+  id: string;
+  taskId: string;
+  recipientEmail: string;
+  recipientName: string;
+  subject: string;
+  emailBody: string;
+  status: 'draft' | 'sent' | 'failed';
+  sentAt?: string;
+  openedAt?: string;
+  createdAt: string;
+}

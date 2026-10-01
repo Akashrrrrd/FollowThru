@@ -1,0 +1,315 @@
+{
+  "metadata": {
+    "version": "1.0",
+    "date_created": "2026-10-01",
+    "purpose": "FollowThru commitment extraction accuracy evaluation",
+    "total_test_cases": 17,
+    "note": "Each test case contains realistic meeting transcripts with manually annotated expected commitments"
+  },
+  "test_cases": [
+    {
+      "id": "TC001",
+      "title": "Simple explicit commitments",
+      "transcript": "Alice: I'll send the report by Friday. Bob: Great, I can review it by Saturday.",
+      "expected_commitments": [
+        {
+          "owner": "Alice",
+          "description": "Send the report",
+          "due_date": "by Friday",
+          "type": "explicit",
+          "confidence": "high"
+        },
+        {
+          "owner": "Bob",
+          "description": "Review the report",
+          "due_date": "by Saturday",
+          "type": "acceptance",
+          "confidence": "medium"
+        }
+      ]
+    },
+    {
+      "id": "TC002",
+      "title": "Collective commitments",
+      "transcript": "Sarah: We'll launch the feature next week. Mike: Let's schedule a planning meeting for Monday.",
+      "expected_commitments": [
+        {
+          "owner": "Unassigned",
+          "description": "Launch the feature",
+          "due_date": "next week",
+          "type": "collective",
+          "confidence": "medium"
+        },
+        {
+          "owner": "Unassigned",
+          "description": "Schedule a planning meeting",
+          "due_date": "Monday",
+          "type": "collective",
+          "confidence": "medium"
+        }
+      ]
+    },
+    {
+      "id": "TC003",
+      "title": "Named person in collective",
+      "transcript": "Priya: Let's have Vikram run the performance tests by Wednesday.",
+      "expected_commitments": [
+        {
+          "owner": "Vikram",
+          "description": "Run the performance tests",
+          "due_date": "by Wednesday",
+          "type": "collective",
+          "confidence": "medium"
+        }
+      ]
+    },
+    {
+      "id": "TC004",
+      "title": "Dependency-based commitment",
+      "transcript": "Rahul: Once the database migration is complete, I'll update the API by October 12th.",
+      "expected_commitments": [
+        {
+          "owner": "Rahul",
+          "description": "Update the API",
+          "due_date": "by October 12th",
+          "dependency": "database migration is complete",
+          "type": "explicit",
+          "confidence": "high"
+        }
+      ]
+    },
+    {
+      "id": "TC005",
+      "title": "Multiple dates in one commitment",
+      "transcript": "David: I need the requirements by Friday and the prototype by the following Monday.",
+      "expected_commitments": [
+        {
+          "owner": "David",
+          "description": "Provide requirements",
+          "due_date": "by Friday",
+          "type": "explicit",
+          "confidence": "high"
+        },
+        {
+          "owner": "David",
+          "description": "Build the prototype",
+          "due_date": "by Monday",
+          "type": "explicit",
+          "confidence": "high"
+        }
+      ]
+    },
+    {
+      "id": "TC006",
+      "title": "Explicit calendar date",
+      "transcript": "Emma: We'll finalize the budget on October 15th. Jack: I'll send the invoice by October 20th.",
+      "expected_commitments": [
+        {
+          "owner": "Unassigned",
+          "description": "Finalize the budget",
+          "due_date": "October 15th",
+          "type": "collective",
+          "confidence": "medium"
+        },
+        {
+          "owner": "Jack",
+          "description": "Send the invoice",
+          "due_date": "by October 20th",
+          "type": "explicit",
+          "confidence": "high"
+        }
+      ]
+    },
+    {
+      "id": "TC007",
+      "title": "Non-commitments (should extract 0)",
+      "transcript": "Alice: What do you think about the new design? Bob: It looks good. Charlie: Let's discuss it more in the next meeting.",
+      "expected_commitments": []
+    },
+    {
+      "id": "TC008",
+      "title": "Mixed: commitment and non-commitment",
+      "transcript": "Maria: Do you think we should update the docs? Leo: I can update them by end of week. Anna: Let's check with the team first.",
+      "expected_commitments": [
+        {
+          "owner": "Leo",
+          "description": "Update the docs",
+          "due_date": "by end of week",
+          "type": "acceptance",
+          "confidence": "high"
+        }
+      ]
+    },
+    {
+      "id": "TC009",
+      "title": "Tentative commitment (low confidence)",
+      "transcript": "Chris: I could try to optimize the performance if I get some time.",
+      "expected_commitments": [
+        {
+          "owner": "Chris",
+          "description": "Optimize the performance",
+          "due_date": null,
+          "type": "acceptance",
+          "confidence": "low"
+        }
+      ]
+    },
+    {
+      "id": "TC010",
+      "title": "Request vs commitment",
+      "transcript": "Manager: Can someone review the code? Engineer: Sure, I'll review it today.",
+      "expected_commitments": [
+        {
+          "owner": "Engineer",
+          "description": "Review the code",
+          "due_date": "today",
+          "type": "acceptance",
+          "confidence": "high"
+        }
+      ]
+    },
+    {
+      "id": "TC011",
+      "title": "Relative dates",
+      "transcript": "Sam: I'll finalize the proposal in 3 days. Taylor: I can review tomorrow.",
+      "expected_commitments": [
+        {
+          "owner": "Sam",
+          "description": "Finalize the proposal",
+          "due_date": "in 3 days",
+          "type": "explicit",
+          "confidence": "high"
+        },
+        {
+          "owner": "Taylor",
+          "description": "Review the proposal",
+          "due_date": "tomorrow",
+          "type": "acceptance",
+          "confidence": "high"
+        }
+      ]
+    },
+    {
+      "id": "TC012",
+      "title": "Multi-person meeting with multiple commitments",
+      "transcript": "Priya: Alright everyone, let's plan the Q4 launch. Vikram: I can have the database ready by October 8th. Rahul: Once that's done, I'll complete the API by October 11th. Ananya: I'll update the UI by October 10th.",
+      "expected_commitments": [
+        {
+          "owner": "Vikram",
+          "description": "Have the database ready",
+          "due_date": "by October 8th",
+          "type": "acceptance",
+          "confidence": "high"
+        },
+        {
+          "owner": "Rahul",
+          "description": "Complete the API",
+          "due_date": "by October 11th",
+          "dependency": "database is done",
+          "type": "explicit",
+          "confidence": "high"
+        },
+        {
+          "owner": "Ananya",
+          "description": "Update the UI",
+          "due_date": "by October 10th",
+          "type": "explicit",
+          "confidence": "high"
+        }
+      ]
+    },
+    {
+      "id": "TC013",
+      "title": "Past tense (no commitment)",
+      "transcript": "Lisa: I sent the files yesterday. Mark: Great, I already reviewed them.",
+      "expected_commitments": []
+    },
+    {
+      "id": "TC014",
+      "title": "Hedged language",
+      "transcript": "Alex: We might need to update the deployment script. Jordan: We should probably test it more thoroughly.",
+      "expected_commitments": []
+    },
+    {
+      "id": "TC015",
+      "title": "Complex commitment with condition",
+      "transcript": "Casey: If we get approval, I'll start the implementation by October 5th. Otherwise, we'll wait until next month.",
+      "expected_commitments": [
+        {
+          "owner": "Casey",
+          "description": "Start the implementation",
+          "due_date": "by October 5th",
+          "dependency": "approval is received",
+          "type": "explicit",
+          "confidence": "medium"
+        }
+      ]
+    },
+    {
+      "id": "TC016",
+      "title": "Real-world: Mixed agenda meeting",
+      "transcript": "Emily: Thanks everyone for joining. Let's review our status. Thomas: I finished the documentation like I said. Emily: Great! Now, can someone ensure the tests pass? Patricia: I can run the full test suite tomorrow and send you the report. Michael: Should we also verify the API responses? Emily: Yes, let's do that. Michael, can you handle it? Michael: Sure, I'll validate all the endpoints by Friday. Diana: I'll update the wiki with the new process by end of week.",
+      "expected_commitments": [
+        {
+          "owner": "Patricia",
+          "description": "Run the full test suite and send report",
+          "due_date": "tomorrow",
+          "type": "acceptance",
+          "confidence": "high"
+        },
+        {
+          "owner": "Michael",
+          "description": "Validate all the endpoints",
+          "due_date": "by Friday",
+          "type": "acceptance",
+          "confidence": "high"
+        },
+        {
+          "owner": "Diana",
+          "description": "Update the wiki with the new process",
+          "due_date": "by end of week",
+          "type": "explicit",
+          "confidence": "high"
+        }
+      ]
+    },
+    {
+      "id": "TC017",
+      "title": "Continuity example: Commitment mentioned in follow-up",
+      "transcript": "Meeting 1 - Sarah: I'll have the proposal ready by next Friday. Meeting 2 (one week later) - Sarah: The proposal is done as I promised.",
+      "expected_commitments": [
+        {
+          "owner": "Sarah",
+          "description": "Have the proposal ready",
+          "due_date": "by Friday",
+          "type": "explicit",
+          "confidence": "high"
+        }
+      ],
+      "note": "This represents a commitment from Meeting 1 that should be linked to Meeting 2 via Commitment Continuity"
+    }
+  ],
+  "evaluation_guide": {
+    "metrics": {
+      "true_positives": "Commitments correctly extracted with owner, description, and date",
+      "false_positives": "Items extracted that are not commitments (requests, questions, discussions)",
+      "false_negatives": "Commitments in transcript that were not extracted",
+      "precision": "TP / (TP + FP) - What fraction of extractions were correct",
+      "recall": "TP / (TP + FN) - What fraction of actual commitments were found",
+      "f1_score": "2 * (precision * recall) / (precision + recall) - Harmonic mean"
+    },
+    "per_test_evaluation": {
+      "owner_match": "Does extracted owner match expected owner (case-insensitive)?",
+      "description_match": "Is the action description semantically correct?",
+      "date_match": "Is the due date (or phrase) captured correctly?",
+      "type_match": "Is commitment_type correct (explicit/collective/acceptance)?",
+      "confidence_match": "Is confidence level appropriate (high/medium/low)?"
+    },
+    "target_performance": {
+      "precision": ">=0.80",
+      "recall": ">=0.75",
+      "f1_score": ">=0.77",
+      "notes": "These targets are realistic for LLM-based extraction with diverse language patterns"
+    }
+  }
+}

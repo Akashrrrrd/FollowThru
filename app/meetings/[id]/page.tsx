@@ -88,6 +88,10 @@ function MeetingDetailContent({
 
   const [carriedOver, setCarriedOver] = useState<CarriedOverTask[]>([]);
 
+  const [totalTasks, setTotalTasks] = useState(0);
+
+  const [doneTasks, setDoneTasks] = useState(0);
+
   const [loading, setLoading] = useState(true);
 
   const [error, setError] = useState<string | null>(null);
@@ -133,6 +137,10 @@ function MeetingDetailContent({
       setMeeting(data.meeting);
 
       setTasks(data.tasks ?? []);
+
+      setTotalTasks(data.total_tasks ?? 0);
+
+      setDoneTasks(data.done_tasks ?? 0);
 
       // Fetch carried-over tasks
 
@@ -367,7 +375,7 @@ function MeetingDetailContent({
 
   if (!meeting) return <PageError message="Meeting not found." />;
 
-  const doneCount = tasks.filter((t) => t.status === 'done').length;
+  const doneCount = doneTasks;
 
   return (
 
@@ -397,7 +405,7 @@ function MeetingDetailContent({
 
         <p className="mt-1 text-sm text-gray-500">
 
-          {formatDate(meeting.created_at)} — {doneCount}/{tasks.length} tasks
+          {formatDate(meeting.created_at)} — {doneCount}/{totalTasks} tasks
 
           done
 

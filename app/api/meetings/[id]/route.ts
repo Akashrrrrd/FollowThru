@@ -78,11 +78,22 @@ export async function GET(
 
     }
 
+    // Calculate task statistics (same logic as /api/meetings)
+    const taskList = tasks ?? [];
+    const totalTasks = taskList.length;
+    const doneTasks = taskList.filter(
+      (t) => t.status === 'done' || t.status === 'completed'
+    ).length;
+
     return NextResponse.json({
 
       meeting,
 
-      tasks: tasks ?? [],
+      tasks: taskList,
+
+      total_tasks: totalTasks,
+
+      done_tasks: doneTasks,
 
     });
 

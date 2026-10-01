@@ -25,6 +25,7 @@ import {
 import { TaskCard } from '@/components/task-card';
 
 import { PageLoading, PageError, EmptyState } from '@/components/page-loading';
+import { LoadingTaskCards } from '@/components/loading';
 
 import { ProtectedRoute } from '@/components/protected-route';
 
@@ -465,7 +466,7 @@ function DashboardContent() {
 
       {loading ? (
 
-        <PageLoading />
+        <LoadingTaskCards count={4} />
 
       ) : error ? (
 

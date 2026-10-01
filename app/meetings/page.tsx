@@ -9,6 +9,7 @@ import { Plus, ChevronRight } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 
 import { PageLoading, PageError, EmptyState } from '@/components/page-loading';
+import { LoadingTaskCards } from '@/components/loading';
 
 import { ProtectedRoute } from '@/components/protected-route';
 
@@ -112,7 +113,7 @@ function MeetingsContent() {
 
       {loading ? (
 
-        <PageLoading />
+        <LoadingTaskCards count={3} />
 
       ) : error ? (
 

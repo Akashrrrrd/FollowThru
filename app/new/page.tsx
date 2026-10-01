@@ -9,6 +9,7 @@ import { Textarea } from '@/components/ui/textarea';
 import { ProtectedRoute } from '@/components/protected-route';
 import { useAuthFetch } from '@/hooks/use-auth-fetch';
 import { Badge } from '@/components/ui/badge';
+import { LoadingExtraction } from '@/components/loading';
 import type { ExtractedCommitment } from '@/lib/types';
 
 const EXAMPLE_TRANSCRIPT = `Sarah: Alright, let's get started. John, did you send the Q3 report to the client yet?
@@ -114,6 +115,15 @@ function NewMeetingContent() {
     setParticipants([]);
     setError(null);
   };
+
+  // Show extraction progress screen during loading
+  if (loading && step === 'participant-select') {
+    return (
+      <div className="flex min-h-screen items-center justify-center">
+        <LoadingExtraction />
+      </div>
+    );
+  }
 
   return (
     <div className="mx-auto max-w-3xl px-4 py-10">

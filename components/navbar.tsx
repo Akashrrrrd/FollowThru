@@ -11,6 +11,7 @@ import {
   LogOut,
   User,
   AlertCircle,
+  Zap,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { Button } from '@/components/ui/button';
@@ -21,6 +22,7 @@ const links = [
   { href: '/dashboard', label: 'Dashboard', icon: LayoutDashboard },
   { href: '/pending-review', label: 'Review', icon: AlertCircle },
   { href: '/meetings', label: 'Meetings', icon: History },
+  { href: '/integrations', label: 'Connect', icon: Zap },
   { href: '/insights', label: 'Insights', icon: BarChart3 },
   { href: '/new', label: 'New Meeting', icon: Plus },
 ];

@@ -2,7 +2,7 @@
 
 import { useState } from 'react';
 import { useRouter } from 'next/navigation';
-import { Loader2, Sparkles, AlertCircle, Users } from 'lucide-react';
+import { Loader2, Sparkles, AlertCircle, Users, Upload } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Textarea } from '@/components/ui/textarea';
@@ -33,6 +33,7 @@ function NewMeetingContent() {
   const [error, setError] = useState<string | null>(null);
   const [step, setStep] = useState<'input' | 'participant-select'>('input');
   const [isDemoMode, setIsDemoMode] = useState(false);
+  const [uploadingFile, setUploadingFile] = useState(false);
 
   // Extract unique participants from transcript
   const extractParticipants = (text: string): string[] => {
@@ -170,6 +171,63 @@ function NewMeetingContent() {
     setStep('input');
   };
 
+  const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    setUploadingFile(true);
+    setError(null);
+
+    const file = e.target.files?.[0];
+    if (!file) {
+      setUploadingFile(false);
+      return;
+    }
+
+    try {
+      // Validate file type
+      const supportedTypes = ['.txt', '.vtt', '.srt'];
+      const fileName = file.name.toLowerCase();
+      const isSupported = supportedTypes.some((type) => fileName.endsWith(type));
+
+      if (!isSupported) {
+        setError(
+          `File format not supported. Supported formats: TXT, VTT, SRT. You uploaded: ${file.name}`,
+        );
+        setUploadingFile(false);
+        return;
+      }
+
+      // Validate file size (max 5 MB)
+      const maxSize = 5 * 1024 * 1024;
+      if (file.size > maxSize) {
+        setError(`File is too large. Maximum size is 5 MB, but your file is ${(file.size / 1024 / 1024).toFixed(1)} MB.`);
+        setUploadingFile(false);
+        return;
+      }
+
+      // Read file content
+      const fileContent = await file.text();
+
+      // Validate file is not empty
+      if (!fileContent.trim()) {
+        setError('File is empty. Please provide a transcript file with content.');
+        setUploadingFile(false);
+        return;
+      }
+
+      // Set transcript and auto-generate title from filename
+      setTranscript(fileContent);
+      if (!title.trim()) {
+        const titleFromFilename = file.name.replace(/\.(txt|vtt|srt)$/i, '').replace(/[-_]/g, ' ');
+        setTitle(titleFromFilename);
+      }
+
+      setUploadingFile(false);
+    } catch (err) {
+      console.error('File upload error:', err);
+      setError('Failed to read file. Please try again.');
+      setUploadingFile(false);
+    }
+  };
+
   // Show extraction progress screen during loading
   if (loading && step === 'participant-select') {
     return (
@@ -244,6 +302,25 @@ function NewMeetingContent() {
                 disabled={loading}
                 className="min-h-[300px] resize-y border-gray-200 font-mono text-sm leading-relaxed"
               />
+              <p className="mt-2 text-xs text-gray-500">
+                Or upload a transcript file:
+              </p>
+              <div className="mt-2 flex items-center gap-2">
+                <Input
+                  id="transcript-file"
+                  type="file"
+                  accept=".txt,.vtt,.srt"
+                  onChange={handleFileUpload}
+                  disabled={loading || uploadingFile}
+                  className="border-gray-200"
+                />
+                {uploadingFile && (
+                  <Loader2 className="h-4 w-4 animate-spin text-blue-600" />
+                )}
+              </div>
+              <p className="mt-1 text-xs text-gray-500">
+                Supported: TXT, VTT, SRT (max 5 MB)
+              </p>
             </div>
 
             {error && (

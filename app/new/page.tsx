@@ -12,13 +12,14 @@ import { Badge } from '@/components/ui/badge';
 import { LoadingExtraction } from '@/components/loading';
 import type { ExtractedCommitment } from '@/lib/types';
 
-const EXAMPLE_TRANSCRIPT = `Sarah: Alright, let's get started. John, did you send the Q3 report to the client yet?
-John: Not yet, I'll send the report by Friday.
-Sarah: Good. And Mike, can you schedule the design review for next Tuesday?
-Mike: Sure, I'll set up the calendar invite by tomorrow.
-Sarah: Great. I'll follow up with the client about the budget approval by the end of the week.
-John: I should also mention — I'll update the project tracker with the latest milestones by Monday.
-Sarah: Perfect. Let's circle back next week to check on everything.`;
+const EXAMPLE_TRANSCRIPT = `Priya: Alright, let's talk about the launch timeline. We have 4 weeks to ship the mobile app update.
+Vikram: I can have the database migration ready by October 8th. After that, Rahul can start the API integration.
+Rahul: Sure, once Vikram finishes the migration, I'll handle the API endpoints. I can knock that out in 3 days, so by October 11th.
+Priya: Perfect. Ananya, can you work on the mobile UI components?
+Ananya: I'll have the UI components and design system updated by October 10th. But I'll need the final API spec by October 9th at the latest.
+Rahul: I'll send you the API spec by October 9th morning.
+Vikram: One more thing — I'll also update the database documentation by end of week.
+Priya: Great. We'll schedule a final integration test meeting for October 15th to verify everything works together.`;
 
 function NewMeetingContent() {
   const router = useRouter();
@@ -31,6 +32,7 @@ function NewMeetingContent() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [step, setStep] = useState<'input' | 'participant-select'>('input');
+  const [isDemoMode, setIsDemoMode] = useState(false);
 
   // Extract unique participants from transcript
   const extractParticipants = (text: string): string[] => {
@@ -116,6 +118,31 @@ function NewMeetingContent() {
     setError(null);
   };
 
+  const handleTryDemo = () => {
+    setIsDemoMode(true);
+    setTitle('Q4 Mobile App Launch - Technical Planning');
+    setTranscript(EXAMPLE_TRANSCRIPT);
+    setError(null);
+    // Automatically extract participants and move to participant selection
+    const extractedParticipants = extractParticipants(EXAMPLE_TRANSCRIPT);
+    setParticipants(extractedParticipants);
+    setStep('participant-select');
+    // Auto-select the first participant for demo convenience
+    if (extractedParticipants.length > 0) {
+      setSelectedParticipant(extractedParticipants[0]);
+    }
+  };
+
+  const handleBackToInputFromDemo = () => {
+    setIsDemoMode(false);
+    setTitle('');
+    setTranscript('');
+    setSelectedParticipant('');
+    setParticipants([]);
+    setError(null);
+    setStep('input');
+  };
+
   // Show extraction progress screen during loading
   if (loading && step === 'participant-select') {
     return (
@@ -135,6 +162,26 @@ function NewMeetingContent() {
               Paste a transcript and FollowThru will extract every commitment
               automatically.
             </p>
+          </div>
+
+          {/* Demo Button */}
+          <div className="mb-6 rounded-lg border-2 border-dashed border-blue-300 bg-blue-50 p-6">
+            <div className="flex items-center justify-between">
+              <div>
+                <h3 className="font-semibold text-gray-900">Try with a sample transcript</h3>
+                <p className="mt-1 text-sm text-gray-600">
+                  See FollowThru in action with a realistic multi-person meeting showing commitment tracking and continuity.
+                </p>
+              </div>
+              <Button
+                type="button"
+                onClick={handleTryDemo}
+                disabled={loading}
+                className="ml-4 shrink-0 bg-blue-600 text-white hover:bg-blue-700"
+              >
+                Load Demo
+              </Button>
+            </div>
           </div>
 
           <form onSubmit={handleAnalyzeTranscript} className="space-y-6">
@@ -220,6 +267,11 @@ function NewMeetingContent() {
             <p className="mt-1 text-sm text-gray-500">
               Select which participant is you so we can identify your commitments correctly.
             </p>
+            {isDemoMode && (
+              <div className="mt-3 inline-block rounded-full bg-blue-100 px-3 py-1 text-xs font-medium text-blue-700">
+                📋 Demo Mode
+              </div>
+            )}
           </div>
 
           <div className="mb-8 rounded-lg border border-gray-200 bg-white p-6 shadow-sm">
@@ -274,7 +326,7 @@ function NewMeetingContent() {
                 )}
               </Button>
               <Button
-                onClick={handleBackToInput}
+                onClick={isDemoMode ? handleBackToInputFromDemo : handleBackToInput}
                 disabled={loading}
                 variant="outline"
                 className="border-gray-200"

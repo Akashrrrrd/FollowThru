@@ -167,3 +167,84 @@ export function LoadingMini() {
     </svg>
   );
 }
+
+// Task cards skeleton loader
+export function LoadingTaskCards({ count = 4 }: { count?: number }) {
+  return (
+    <div className="grid gap-4">
+      {Array.from({ length: count }).map((_, i) => (
+        <div
+          key={i}
+          className="rounded-lg border border-border bg-card p-6 animate-pulse"
+        >
+          {/* Card header skeleton */}
+          <div className="flex items-start justify-between mb-4">
+            <div className="flex-1">
+              <div className="h-5 bg-muted rounded w-3/4 mb-2" />
+              <div className="h-3 bg-muted rounded w-1/2" />
+            </div>
+            <div className="h-8 w-8 bg-muted rounded-full" />
+          </div>
+
+          {/* Card content skeleton */}
+          <div className="space-y-3">
+            <div className="h-3 bg-muted rounded w-full" />
+            <div className="h-3 bg-muted rounded w-5/6" />
+          </div>
+
+          {/* Card footer skeleton */}
+          <div className="flex gap-2 mt-4 pt-4 border-t border-border">
+            <div className="h-2 bg-muted rounded w-12" />
+            <div className="h-2 bg-muted rounded w-16" />
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+// Extraction steps loader
+export function LoadingExtraction() {
+  return (
+    <div className="flex flex-col items-center justify-center gap-6 py-16">
+      <div className="relative">
+        <div className="w-16 h-16 rounded-full border-4 border-gold/20 border-t-gold animate-spin" />
+        <div className="absolute inset-0 flex items-center justify-center">
+          <svg
+            className="w-8 h-8 text-gold"
+            xmlns="http://www.w3.org/2000/svg"
+            fill="none"
+            viewBox="0 0 24 24"
+          >
+            <path
+              fill="currentColor"
+              d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-2 15l-5-5 1.41-1.41L10 14.17l7.59-7.59L19 8l-9 9z"
+            />
+          </svg>
+        </div>
+      </div>
+      <div className="text-center">
+        <h3 className="font-semibold text-foreground mb-2">
+          Extracting Commitments
+        </h3>
+        <p className="text-sm text-muted-foreground">
+          Analyzing meeting transcript and identifying action items...
+        </p>
+      </div>
+      <div className="flex gap-1">
+        <div
+          className="h-1 w-1 bg-gold rounded-full animate-bounce"
+          style={{ animationDelay: '0s' }}
+        />
+        <div
+          className="h-1 w-1 bg-gold rounded-full animate-bounce"
+          style={{ animationDelay: '0.2s' }}
+        />
+        <div
+          className="h-1 w-1 bg-gold rounded-full animate-bounce"
+          style={{ animationDelay: '0.4s' }}
+        />
+      </div>
+    </div>
+  );
+}

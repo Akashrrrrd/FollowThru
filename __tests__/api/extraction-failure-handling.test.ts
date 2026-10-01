@@ -63,7 +63,7 @@ describe('Extraction Failure Handling', () => {
     test('should reject missing title field', () => {
       const body = {
         transcript: 'A: I will do X. B: Thanks.',
-      };
+      } as any;
       expect(body.title).toBeUndefined();
     });
 

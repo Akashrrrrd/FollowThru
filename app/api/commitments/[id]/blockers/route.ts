@@ -35,13 +35,16 @@ export async function GET(
 
     if (error) throw error;
 
-    const transformed = (blockers || []).map((b: any) => ({
-      id: b.id,
-      blocker_task_id: b.blocker_task_id,
-      blocker_description: b.tasks?.description || 'Unknown',
-      blocked_task_id: b.blocked_task_id,
-      reason: b.reason,
-    }));
+    const transformed = (blockers || []).map((b: any) => {
+      const blockerTask = Array.isArray(b.tasks) ? b.tasks[0] : b.tasks;
+      return {
+        id: b.id,
+        blocker_task_id: b.blocker_task_id,
+        blocker_description: blockerTask?.description || 'Unknown',
+        blocked_task_id: b.blocked_task_id,
+        reason: b.reason,
+      };
+    });
 
     return NextResponse.json({ blockers: transformed });
   } catch (error) {
@@ -94,11 +97,13 @@ export async function POST(
 
     if (insertError) throw insertError;
 
+    const blockerTask = Array.isArray(blocker.tasks) ? blocker.tasks[0] : blocker.tasks;
+
     return NextResponse.json({
       blocker: {
         id: blocker.id,
         blocker_task_id: blocker.blocker_task_id,
-        blocker_description: blocker.tasks?.description || 'Unknown',
+        blocker_description: blockerTask?.description || 'Unknown',
         blocked_task_id: blocker.blocked_task_id,
         reason: blocker.reason,
       },

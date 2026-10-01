@@ -107,6 +107,9 @@ export async function POST(
 
       return NextResponse.json({ status: 'rephrased', new_description });
     }
+
+    // Fallback response (should not reach here)
+    return NextResponse.json({ error: 'Invalid action' }, { status: 400 });
   } catch (error) {
     console.error('Hallucination review error:', error);
     return NextResponse.json(

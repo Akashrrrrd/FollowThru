@@ -61,7 +61,7 @@ export function UnresolvedCommitmentsScreen({
         (t) =>
           t.status !== 'done' &&
           t.status !== 'completed' &&
-          t.state !== 'DISMISSED'
+          t.status !== 'dismissed'
       );
 
       setCommitments(unresolved);

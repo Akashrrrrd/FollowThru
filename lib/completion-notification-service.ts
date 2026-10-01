@@ -1,4 +1,5 @@
 import { createClient } from '@supabase/supabase-js';
+import { getEmailProvider } from './email-provider';
 
 interface ResponsiblePerson {
   id: string;
@@ -19,6 +20,7 @@ interface CompletionNotificationDraft {
 
 export class CompletionNotificationService {
   private supabase: any;
+  private emailProvider = getEmailProvider();
 
   constructor(supabase: any) {
     this.supabase = supabase;
@@ -163,15 +165,25 @@ FollowThru Team
 
     if (fetchError) throw fetchError;
 
-    // In production, would call SendGrid or similar email service here
-    // For now, just mark as sent
+    // Send email via provider (Resend or Console)
+    const emailSent = await this.emailProvider.send(
+      notification.recipient_email,
+      notification.subject,
+      notification.email_body,
+    );
+
+    // Update status based on send result
     await this.supabase
       .from('completion_notifications')
       .update({
-        status: 'sent',
+        status: emailSent ? 'sent' : 'failed',
         sent_at: new Date(),
       })
       .eq('id', notificationId);
+
+    if (!emailSent) {
+      throw new Error('Failed to send email');
+    }
   }
 
   /**

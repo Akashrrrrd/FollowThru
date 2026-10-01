@@ -144,12 +144,14 @@ FollowThru Team
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           notification_id: emailDraft.id,
-          subject: emailDraft.subject,
-          email_body: emailDraft.body,
+          action: 'send',
         }),
       });
 
-      if (!res.ok) throw new Error('Failed to send email');
+      if (!res.ok) {
+        const data = await res.json();
+        throw new Error(data.error || 'Failed to send email');
+      }
 
       setSent(true);
       setEmailDraft({ ...emailDraft, status: 'sent' });

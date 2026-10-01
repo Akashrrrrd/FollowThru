@@ -96,7 +96,7 @@ export async function PATCH(request: NextRequest) {
 
     if (action === 'send') {
       await service.sendNotification(notification_id);
-      return NextResponse.json({ status: 'sent' });
+      return NextResponse.json({ status: 'sent', message: 'Email sent successfully' });
     } else if (action === 'update') {
       const { subject, email_body } = body;
       await service.updateDraftNotification(notification_id, {
@@ -110,7 +110,7 @@ export async function PATCH(request: NextRequest) {
   } catch (error) {
     console.error('Update notification error:', error);
     return NextResponse.json(
-      { error: 'Failed to update notification' },
+      { error: error instanceof Error ? error.message : 'Failed to update notification' },
       { status: 500 },
     );
   }

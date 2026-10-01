@@ -10,6 +10,7 @@ import {
   BarChart3,
   LogOut,
   User,
+  AlertCircle,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { Button } from '@/components/ui/button';
@@ -18,6 +19,7 @@ import { useAuth } from '@/components/auth-provider';
 
 const links = [
   { href: '/dashboard', label: 'Dashboard', icon: LayoutDashboard },
+  { href: '/pending-review', label: 'Review', icon: AlertCircle },
   { href: '/meetings', label: 'Meetings', icon: History },
   { href: '/insights', label: 'Insights', icon: BarChart3 },
   { href: '/new', label: 'New Meeting', icon: Plus },

@@ -66,13 +66,34 @@ export class HallucinationDetector {
     taskId: string,
     reason: string,
     confidence: number,
-  ): Promise<void> {
-    await this.supabase.from('hallucination_flags').insert({
-      meeting_id: meetingId,
-      task_id: taskId,
-      reason,
-      confidence,
-    });
+  ): Promise<string> {
+    // Create hallucination flag
+    const { data: flag, error: flagError } = await this.supabase
+      .from('hallucination_flags')
+      .insert({
+        meeting_id: meetingId,
+        task_id: taskId,
+        reason,
+        confidence,
+      })
+      .select('id')
+      .single();
+
+    if (flagError) throw flagError;
+
+    // Set 5-minute grace period on the task
+    const graceUntil = new Date();
+    graceUntil.setMinutes(graceUntil.getMinutes() + 5);
+
+    await this.supabase
+      .from('tasks')
+      .update({
+        flagged_for_review: true,
+        grace_period_ends_at: graceUntil.toISOString(),
+      })
+      .eq('id', taskId);
+
+    return flag.id;
   }
 
   /**

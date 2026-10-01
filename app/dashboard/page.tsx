@@ -54,6 +54,8 @@ function DashboardContent() {
   const [loading, setLoading] = useState(true);
 
   const [error, setError] = useState<string | null>(null);
+  const [seedingDemo, setSeedingDemo] = useState(false);
+  const [seedingError, setSeedingError] = useState<string | null>(null);
 
   const fetchTasks = useCallback(async () => {
 
@@ -154,6 +156,35 @@ function DashboardContent() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
 
   }, []);
+
+  const handleSeedDemoData = async () => {
+    setSeedingDemo(true);
+    setSeedingError(null);
+
+    try {
+      const res = await authFetch('/api/demo/seed', {
+        method: 'POST',
+      });
+
+      const data = await res.json();
+
+      if (!res.ok) {
+        setSeedingError(data.error || 'Failed to seed demo data.');
+        setSeedingDemo(false);
+        return;
+      }
+
+      // Refresh tasks to show newly seeded data
+      setTimeout(() => {
+        fetchTasks();
+        setSeedingDemo(false);
+      }, 500);
+    } catch (err) {
+      console.error('Seed demo error:', err);
+      setSeedingError('Network error. Please try again.');
+      setSeedingDemo(false);
+    }
+  };
 
   const handleToggleDone = async (id: string, done: boolean) => {
     setTasks((prev) =>
@@ -282,19 +313,71 @@ function DashboardContent() {
 
         </div>
 
-        <Link href="/new">
+        <div className="flex gap-3">
 
-          <Button className="bg-blue-600 text-white hover:bg-blue-700">
+          {tasks.length === 0 && (
 
-            <Plus className="mr-1.5 h-4 w-4" />
+            <Button
 
-            New Meeting
+              onClick={handleSeedDemoData}
 
-          </Button>
+              disabled={seedingDemo}
 
-        </Link>
+              className="bg-green-600 text-white hover:bg-green-700"
+
+            >
+
+              {seedingDemo ? (
+
+                <>
+
+                  <span className="mr-1.5 h-4 w-4 animate-spin">⏳</span>
+
+                  Loading Demo...
+
+                </>
+
+              ) : (
+
+                <>
+
+                  <Plus className="mr-1.5 h-4 w-4" />
+
+                  Try Demo Data
+
+                </>
+
+              )}
+
+            </Button>
+
+          )}
+
+          <Link href="/new">
+
+            <Button className="bg-blue-600 text-white hover:bg-blue-700">
+
+              <Plus className="mr-1.5 h-4 w-4" />
+
+              New Meeting
+
+            </Button>
+
+          </Link>
+
+        </div>
 
       </div>
+
+      {seedingError && (
+
+        <div className="mb-6 rounded-lg border border-red-200 bg-red-50 p-4 text-sm text-red-700">
+
+          {seedingError}
+
+        </div>
+
+      )}
 
       {/* Lifecycle Metrics */}
 

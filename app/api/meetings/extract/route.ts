@@ -12,13 +12,29 @@ export const dynamic = 'force-dynamic';
 // Turns a raw extraction error into a message the user can understand.
 function friendlyExtractionError(err: unknown): string {
   const msg = err instanceof Error ? err.message : String(err);
+
+  // Specific error patterns with user-friendly messages
   if (/decommission/i.test(msg)) {
-    return 'The AI model is misconfigured. The meeting was saved, but no tasks were extracted.';
+    return 'The AI model is currently unavailable. Your meeting was saved. Please try again in a moment.';
   }
-  if (/rate_limit|429/i.test(msg)) {
-    return 'Rate limit reached. Please wait a moment and try again.';
+  if (/rate_limit|429|quota/i.test(msg)) {
+    return 'API rate limit reached. Please wait a few moments and try again.';
   }
-  return 'The AI could not process this transcript. The meeting was saved but no tasks were extracted.';
+  if (/timeout|timed out|ETIMEDOUT/i.test(msg)) {
+    return 'The AI service took too long to respond. Please try again with a shorter transcript or try again in a moment.';
+  }
+  if (/authentication|api.*key|401|403/i.test(msg)) {
+    return 'The AI service authentication failed. Please contact support.';
+  }
+  if (/no.*response|empty.*response/i.test(msg)) {
+    return 'The AI service returned no results. Your meeting was saved. Please try again.';
+  }
+  if (/malformed|invalid.*json|parse/i.test(msg)) {
+    return 'The AI service returned unexpected data. Your meeting was saved. Please try again.';
+  }
+
+  // Generic fallback
+  return 'Could not extract commitments from this transcript. Your meeting was saved. Please review the transcript and try again, or extract manually from the meeting detail page.';
 }
 
 export async function POST(req: NextRequest) {
@@ -41,8 +57,35 @@ export async function POST(req: NextRequest) {
     if (!title || !title.trim()) {
       return NextResponse.json({ error: 'Meeting title is required.' }, { status: 400 });
     }
+
+    // Validate transcript presence and minimum length
     if (!transcript || !transcript.trim()) {
-      return NextResponse.json({ error: 'Transcript is required.' }, { status: 400 });
+      return NextResponse.json(
+        { error: 'Transcript is required. Please paste a meeting transcript to extract commitments from.' },
+        { status: 400 },
+      );
+    }
+
+    const trimmedTranscript = transcript.trim();
+
+    // Check for extremely short transcripts (less meaningful for extraction)
+    if (trimmedTranscript.length < 50) {
+      return NextResponse.json(
+        {
+          error:
+            'Transcript is too short. Please provide a more detailed transcript with at least a few exchanges between participants (e.g., "Person A: ... Person B: ...").',
+        },
+        { status: 400 },
+      );
+    }
+
+    // Check for transcript that might be mostly noise/non-meaningful
+    const wordCount = trimmedTranscript.split(/\s+/).length;
+    if (wordCount < 20) {
+      return NextResponse.json(
+        { error: 'Transcript is too brief. Please provide a transcript with more content (at least 20 words).' },
+        { status: 400 },
+      );
     }
 
     const supabase = createServerClient();
@@ -51,7 +94,7 @@ export async function POST(req: NextRequest) {
       .from('meetings')
       .insert({
         title: title.trim(),
-        transcript: transcript.trim(),
+        transcript: trimmedTranscript,
         user_id: user.userId,
       })
       .select()
@@ -71,7 +114,7 @@ export async function POST(req: NextRequest) {
     // callGroqForExtraction already retries once on temporary errors,
     // and never retries permanent ones (for example a decommissioned model).
     try {
-      commitments = await callGroqForExtraction(transcript.trim(), meetingDate);
+      commitments = await callGroqForExtraction(trimmedTranscript, meetingDate);
     } catch (err) {
       console.error('Extraction failed:', err);
       extractionError = friendlyExtractionError(err);
@@ -81,7 +124,7 @@ export async function POST(req: NextRequest) {
     const pipelineContext: StageContext = {
       meeting_id: meeting.id,
       user_id: user.userId,
-      transcript: transcript.trim(),
+      transcript: trimmedTranscript,
       meeting_date: meetingDateStr,
       extraction_response: { commitments },
     };

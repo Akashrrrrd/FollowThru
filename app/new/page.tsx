@@ -82,31 +82,58 @@ function NewMeetingContent() {
     setLoading(true);
 
     try {
+      // Validate transcript length (minimum 50 characters to avoid trivial inputs)
+      const trimmedTranscript = transcript.trim();
+      if (trimmedTranscript.length < 50) {
+        setError(
+          'Transcript is too short. Please provide a more detailed meeting transcript with at least a few exchanges between participants.',
+        );
+        setLoading(false);
+        return;
+      }
+
       const res = await authFetch('/api/meetings/extract', {
         method: 'POST',
         body: JSON.stringify({
           title: title.trim(),
-          transcript: transcript.trim(),
-          your_name: selectedParticipant, // Pass the selected participant name
+          transcript: trimmedTranscript,
+          your_name: selectedParticipant,
         }),
       });
 
       const data = await res.json();
 
       if (!res.ok) {
-        setError(data.error || 'Something went wrong. Please try again.');
+        const errorMessage =
+          data.error ||
+          (res.status === 429 ? 'Too many requests. Please wait a moment and try again.' : 'Something went wrong. Please try again.');
+
+        setError(errorMessage);
         setLoading(false);
         return;
       }
 
+      // Check if extraction warning exists (extraction failed, but meeting was saved)
       if (data.warning) {
-        console.warn(data.warning);
+        console.warn('Extraction warning:', data.warning);
+        setError(data.warning);
+        setLoading(false);
+        return;
       }
 
+      // Success: redirect to meeting detail
       router.push(`/meetings/${data.meeting.id}`);
     } catch (err) {
       console.error('Extract error:', err);
-      setError('Network error. Please check your connection and try again.');
+
+      // Handle different types of errors
+      if (err instanceof TypeError) {
+        setError('Network error. Please check your connection and try again.');
+      } else {
+        const message = err instanceof Error ? err.message : 'Unknown error';
+        setError(`Failed to extract commitments: ${message}`);
+      }
+
       setLoading(false);
     }
   };

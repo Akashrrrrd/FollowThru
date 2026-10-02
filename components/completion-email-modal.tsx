@@ -83,7 +83,6 @@ export function CompletionEmailModal({
       } else {
         setSuccess(true);
         if (onSend) await onSend();
-        setTimeout(onClose, 2000);
       }
     } catch (err) {
       setError(
@@ -106,12 +105,20 @@ export function CompletionEmailModal({
 
         <div className="space-y-4">
           {success ? (
-            <Alert className="border-green-200 bg-green-50">
-              <CheckCircle className="h-4 w-4 text-green-600" />
-              <AlertDescription className="text-green-800">
-                Completion email sent successfully!
-              </AlertDescription>
-            </Alert>
+            <>
+              <Alert className="border-green-200 bg-green-50">
+                <CheckCircle className="h-4 w-4 text-green-600" />
+                <AlertDescription className="text-green-800">
+                  Completion email sent successfully!
+                </AlertDescription>
+              </Alert>
+              <Button
+                onClick={onClose}
+                className="w-full bg-green-600 text-white hover:bg-green-700"
+              >
+                Close
+              </Button>
+            </>
           ) : (
             <>
               {error && (

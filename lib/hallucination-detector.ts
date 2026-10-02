@@ -15,6 +15,7 @@ export class HallucinationDetector {
 
   /**
    * Check if extracted commitment likely exists in transcript
+   * Uses multiple signals: text matching, owner presence, date references
    */
   async checkExtraction(
     transcript: string,
@@ -26,27 +27,40 @@ export class HallucinationDetector {
     const descriptionLower = taskDescription.toLowerCase();
     const ownerLower = owner.toLowerCase();
 
-    // Basic checks
-    const hasDescription = transcriptLower.includes(descriptionLower.substring(0, 20));
-    const hasOwner = owner !== 'Unassigned' && transcriptLower.includes(ownerLower);
+    // Extract key terms from description (first few words for better matching)
+    const keyTerms = descriptionLower.split(' ').slice(0, 3);
+
+    // Check 1: Key terms in transcript (more lenient than exact substring)
+    const hasKeyTerms = keyTerms.some((term) => {
+      if (term.length < 3) return true; // Skip very short terms
+      return transcriptLower.includes(term);
+    });
+
+    // Check 2: Owner mentioned
+    const hasOwner = owner !== 'Unassigned' && 
+      (transcriptLower.includes(ownerLower) || 
+       transcriptLower.includes(owner.split(' ')[0].toLowerCase())); // First name
+
+    // Check 3: Date or deadline mentioned
     const hasDate = this.checkDateInTranscript(transcript, dueDate);
 
     let confidence = 0;
     let reasons: string[] = [];
 
-    if (!hasDescription) {
+    // Scoring: if none of the signals are found, confidence increases
+    if (!hasKeyTerms) {
       confidence += 0.4;
-      reasons.push('Task description not found in transcript');
+      reasons.push('Task description keywords not clearly found in transcript');
     }
 
     if (!hasOwner && owner !== 'Unassigned') {
-      confidence += 0.2;
-      reasons.push('Owner name not found in transcript');
+      confidence += 0.25;
+      reasons.push(`Owner "${owner}" not mentioned in transcript`);
     }
 
     if (!hasDate && dueDate && dueDate !== 'No deadline') {
-      confidence += 0.2;
-      reasons.push('Due date not found in transcript');
+      confidence += 0.15;
+      reasons.push('No deadline or date reference found in transcript');
     }
 
     const isHallucination = confidence > 0.5;
@@ -54,7 +68,9 @@ export class HallucinationDetector {
     return {
       isHallucination,
       confidence: Math.min(confidence, 1),
-      reason: reasons.join('; ') || 'Extraction verified in transcript',
+      reason: reasons.length > 0 
+        ? reasons.join('; ') 
+        : 'Extraction verified in transcript',
     };
   }
 
@@ -111,6 +127,40 @@ export class HallucinationDetector {
   }
 
   /**
+   * Get flagged hallucinations for a user
+   */
+  async getFlaggedTasksForUser(userId: string): Promise<any[]> {
+    const { data, error } = await this.supabase
+      .from('tasks')
+      .select('*, hallucination_flags(*)')
+      .eq('user_id', userId)
+      .eq('flagged_for_review', true)
+      .neq('grace_period_ends_at', null)
+      .order('grace_period_ends_at', { ascending: true });
+
+    if (error) throw error;
+    return data || [];
+  }
+
+  /**
+   * Check if grace period has expired for a task
+   */
+  async isGracePeriodExpired(taskId: string): Promise<boolean> {
+    const { data: task } = await this.supabase
+      .from('tasks')
+      .select('grace_period_ends_at')
+      .eq('id', taskId)
+      .single();
+
+    if (!task || !task.grace_period_ends_at) return true;
+
+    const graceEnd = new Date(task.grace_period_ends_at);
+    const now = new Date();
+
+    return now > graceEnd;
+  }
+
+  /**
    * Mark hallucination as resolved
    */
   async resolveFlag(flagId: string): Promise<void> {
@@ -120,6 +170,26 @@ export class HallucinationDetector {
       .eq('id', flagId);
   }
 
+  /**
+   * Clear hallucination flag from task (after grace period expires)
+   */
+  async clearTaskFlag(taskId: string): Promise<void> {
+    await this.supabase
+      .from('tasks')
+      .update({
+        flagged_for_review: false,
+        grace_period_ends_at: null,
+      })
+      .eq('id', taskId);
+
+    // Also resolve any associated flags
+    await this.supabase
+      .from('hallucination_flags')
+      .update({ resolved: true })
+      .eq('task_id', taskId)
+      .eq('resolved', false);
+  }
+
   private checkDateInTranscript(transcript: string, dueDate: string): boolean {
     if (!dueDate || dueDate === 'No deadline') return true;
 
@@ -127,7 +197,8 @@ export class HallucinationDetector {
       /\b\d{1,2}\/\d{1,2}(?:\/\d{2,4})?\b/,
       /\b(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\s+\d{1,2}\b/i,
       /\b(?:monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b/i,
-      /\b(?:today|tomorrow|next\s+week|next\s+month)\b/i,
+      /\b(?:today|tomorrow|next\s+week|next\s+month|end\s+of\s+week)\b/i,
+      /\b(?:this|next)\s+(?:monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b/i,
     ];
 
     return datePatterns.some((pattern) => pattern.test(transcript.toLowerCase()));

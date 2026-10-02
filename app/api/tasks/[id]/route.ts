@@ -6,6 +6,10 @@ import { isValidTransition } from '@/lib/lifecycle';
 
 import { addHistoryEntry } from '@/lib/history';
 
+import { CompletionNotificationService } from '@/lib/completion-notification-service';
+
+import { BidirectionalSyncService } from '@/lib/integrations/bidirectional-sync';
+
 import type { TaskStatus } from '@/lib/types';
 
 export const dynamic = 'force-dynamic';
@@ -55,7 +59,7 @@ export async function PATCH(
     // Verify ownership
     const { data: existing, error: checkError } = await supabase
       .from('tasks')
-      .select('id, status, description, owner, due_date')
+      .select('id, status, description, owner, due_date, source')
       .eq('id', id)
       .eq('user_id', user.userId)
       .maybeSingle();
@@ -68,6 +72,7 @@ export async function PATCH(
     }
 
     const updates: Record<string, unknown> = {};
+    let statusChangedToCompleted = false;
 
     if (status !== undefined) {
       const validStatuses: TaskStatus[] = ['open', 'in_progress', 'blocked', 'completed', 'done', 'overdue'];
@@ -98,6 +103,7 @@ export async function PATCH(
       // If transitioning to 'completed', set completed_at timestamp
       if (status === 'completed') {
         updates.completed_at = new Date().toISOString();
+        statusChangedToCompleted = true;
       }
 
       // Log status change to history
@@ -210,7 +216,36 @@ export async function PATCH(
 
     }
 
-    return NextResponse.json({ task });
+    // Auto-create completion notification if status changed to 'completed'
+    let completionNotificationId: string | null = null;
+    if (statusChangedToCompleted) {
+      try {
+        const notificationService = new CompletionNotificationService(supabase);
+        completionNotificationId = await notificationService.autoCreateCompletionNotification(id, user.userId);
+      } catch (err) {
+        console.error('Error auto-creating completion notification:', err);
+        // Don't fail the task update if notification creation fails
+      }
+    }
+
+    // Trigger reverse sync if task has external source (e.g., jira:KEY-123)
+    if (task.source && Object.keys(updates).length > 0) {
+      try {
+        const [provider] = task.source.split(':');
+        if (provider && ['jira', 'asana', 'monday', 'clickup'].includes(provider)) {
+          const syncService = new BidirectionalSyncService(supabase);
+          await syncService.syncTaskToProvider(user.userId, provider, task);
+        }
+      } catch (err) {
+        console.error('Error syncing task to provider:', err);
+        // Don't fail the task update if sync fails
+      }
+    }
+
+    return NextResponse.json({ 
+      task,
+      completionNotificationId: completionNotificationId || undefined,
+    });
 
   } catch (err) {
 

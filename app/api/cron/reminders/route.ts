@@ -1,6 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createServerClient } from '@/lib/supabase-server';
 import { getEmailProvider, createUpcomingReminderEmail, createOverdueReminderEmail } from '@/lib/email-provider';
+import { NudgeEngine } from '@/lib/integrations/nudge-engine';
+import { createClient } from '@supabase/supabase-js';
 
 export const dynamic = 'force-dynamic';
 
@@ -60,6 +62,8 @@ async function sendReminderEmail(
 
 async function processReminders() {
   const supabase = createServerClient();
+  const nudgeEngine = new NudgeEngine(supabase);
+  
   const today = new Date().toISOString().split('T')[0];
   const tomorrow = new Date(Date.now() + 86400000).toISOString().split('T')[0];
   const threeDaysFromNow = new Date(Date.now() + 3 * 86400000).toISOString().split('T')[0];
@@ -92,24 +96,53 @@ async function processReminders() {
       console.error('Error fetching upcoming tasks:', upcomingError);
     } else if (upcomingTasks) {
       for (const task of upcomingTasks) {
-        // Get user email
-        const { data: userProfile } = await supabase
-          .from('user_profiles')
-          .select('email')
-          .eq('id', task.owner_user_id || task.user_id)
-          .single();
+        const ownerId = task.owner_user_id || task.user_id;
+        
+        try {
+          // Get user preferences to determine delivery channel
+          const { data: prefs } = await supabase
+            .from('user_preferences')
+            .select('nudge_channel')
+            .eq('user_id', ownerId)
+            .single();
 
-        if (userProfile?.email) {
-          const success = await sendReminderEmail(userProfile.email, task.description, task.due_date, 'upcoming');
+          const channel = (prefs?.nudge_channel || 'email') as 'email' | 'slack' | 'teams';
 
-          if (success) {
-            // Mark reminder as sent
-            await supabase.from('tasks').update({ reminder_sent_at: new Date().toISOString() }).eq('id', task.id);
+          // Calculate days until due
+          const dueDay = new Date(task.due_date);
+          const today_date = new Date(today);
+          const daysUntilDue = Math.ceil((dueDay.getTime() - today_date.getTime()) / (1000 * 60 * 60 * 24));
 
-            remindersSent.upcoming++;
-          } else {
-            remindersSent.failed++;
+          // Generate nudge message
+          const nudgeMessage = nudgeEngine.generateNudgeMessage(task.description, -daysUntilDue, task.owner || 'assigned user');
+
+          // Send nudge via NudgeEngine (supports email, slack, teams)
+          if (channel === 'email') {
+            // For email, also send the formatted email
+            const { data: userProfile } = await supabase
+              .from('user_profiles')
+              .select('email')
+              .eq('id', ownerId)
+              .single();
+
+            if (userProfile?.email) {
+              const emailProvider = getEmailProvider();
+              const subject = `Commitment Due Soon: ${task.description.substring(0, 50)}`;
+              const body = createUpcomingReminderEmail(task.description, task.due_date, daysUntilDue);
+              await emailProvider.send(userProfile.email, subject, body);
+            }
           }
+
+          // Send via NudgeEngine (which handles Slack/Teams; email goes to console)
+          await nudgeEngine.sendNudge(task.id, ownerId, nudgeMessage, channel);
+
+          // Mark reminder as sent
+          await supabase.from('tasks').update({ reminder_sent_at: new Date().toISOString() }).eq('id', task.id);
+
+          remindersSent.upcoming++;
+        } catch (err) {
+          console.error(`Error sending upcoming reminder for task ${task.id}:`, err);
+          remindersSent.failed++;
         }
       }
     }
@@ -134,27 +167,56 @@ async function processReminders() {
       console.error('Error fetching overdue tasks:', overdueError);
     } else if (overdueTasks) {
       for (const task of overdueTasks) {
-        // Get user email
-        const { data: userProfile } = await supabase
-          .from('user_profiles')
-          .select('email')
-          .eq('id', task.owner_user_id || task.user_id)
-          .single();
+        const ownerId = task.owner_user_id || task.user_id;
 
-        if (userProfile?.email) {
-          const success = await sendReminderEmail(userProfile.email, task.description, task.due_date, 'overdue');
+        try {
+          // Get user preferences to determine delivery channel
+          const { data: prefs } = await supabase
+            .from('user_preferences')
+            .select('nudge_channel')
+            .eq('user_id', ownerId)
+            .single();
 
-          if (success) {
-            // Mark overdue reminder as sent
-            await supabase
-              .from('tasks')
-              .update({ overdue_reminder_sent_at: new Date().toISOString() })
-              .eq('id', task.id);
+          const channel = (prefs?.nudge_channel || 'email') as 'email' | 'slack' | 'teams';
 
-            remindersSent.overdue++;
-          } else {
-            remindersSent.failed++;
+          // Calculate days overdue
+          const dueDay = new Date(task.due_date);
+          const today_date = new Date(today);
+          const daysSinceOverdue = Math.ceil((today_date.getTime() - dueDay.getTime()) / (1000 * 60 * 60 * 24));
+
+          // Generate nudge message
+          const nudgeMessage = nudgeEngine.generateNudgeMessage(task.description, daysSinceOverdue, task.owner || 'assigned user');
+
+          // Send nudge via NudgeEngine
+          if (channel === 'email') {
+            // For email, also send the formatted email
+            const { data: userProfile } = await supabase
+              .from('user_profiles')
+              .select('email')
+              .eq('id', ownerId)
+              .single();
+
+            if (userProfile?.email) {
+              const emailProvider = getEmailProvider();
+              const subject = `OVERDUE: ${task.description.substring(0, 50)}`;
+              const body = createOverdueReminderEmail(task.description, task.due_date, daysSinceOverdue);
+              await emailProvider.send(userProfile.email, subject, body);
+            }
           }
+
+          // Send via NudgeEngine
+          await nudgeEngine.sendNudge(task.id, ownerId, nudgeMessage, channel);
+
+          // Mark overdue reminder as sent
+          await supabase
+            .from('tasks')
+            .update({ overdue_reminder_sent_at: new Date().toISOString() })
+            .eq('id', task.id);
+
+          remindersSent.overdue++;
+        } catch (err) {
+          console.error(`Error sending overdue reminder for task ${task.id}:`, err);
+          remindersSent.failed++;
         }
       }
     }

@@ -2,26 +2,26 @@ import { createClient } from '@supabase/supabase-js';
 
 interface MetricsData {
   period: string;
-  dateRange: { start: string; end: string };
-  followThrough: {
-    totalCommitments: number;
+  date_range: { start: string; end: string };
+  follow_through: {
+    total_commitments: number;
     completed: number;
     dismissed: number;
     percentage: number;
   };
   velocity: {
-    currentWeek: number;
-    previousWeek: number;
+    current_week: number;
+    previous_week: number;
     trend: Array<{ week: string; count: number }>;
   };
-  decisionRevisits: {
+  decision_revisits: {
     average: number;
-    topRevisited: Array<{
+    top_revisited: Array<{
       id: string;
       description: string;
-      revisitCount: number;
-      rescheduleCount: number;
-      scopeChanges: number;
+      revisit_count: number;
+      reschedule_count: number;
+      scope_changes: number;
     }>;
   };
 }
@@ -44,7 +44,8 @@ export class ExecutiveDashboardService {
       .from('tasks')
       .select('*')
       .eq('user_id', userId)
-      .gte('created_at', dateRange.start.toISOString());
+      .gte('created_at', dateRange.start.toISOString())
+      .lte('created_at', dateRange.end.toISOString());
 
     const followThrough = this.calculateFollowThrough(tasks || []);
 
@@ -56,13 +57,31 @@ export class ExecutiveDashboardService {
 
     return {
       period,
-      dateRange: {
+      date_range: {
         start: dateRange.start.toISOString().split('T')[0],
         end: dateRange.end.toISOString().split('T')[0],
       },
-      followThrough,
-      velocity,
-      decisionRevisits: revisits,
+      follow_through: {
+        total_commitments: followThrough.totalCommitments,
+        completed: followThrough.completed,
+        dismissed: followThrough.dismissed,
+        percentage: followThrough.percentage,
+      },
+      velocity: {
+        current_week: velocity.currentWeek,
+        previous_week: velocity.previousWeek,
+        trend: velocity.trend,
+      },
+      decision_revisits: {
+        average: revisits.average,
+        top_revisited: revisits.topRevisited.map((r) => ({
+          id: r.id,
+          description: r.description,
+          revisit_count: r.revisitCount,
+          reschedule_count: r.rescheduleCount,
+          scope_changes: r.scopeChanges,
+        })),
+      },
     };
   }
 
@@ -104,7 +123,8 @@ export class ExecutiveDashboardService {
       .from('tasks')
       .select('*')
       .eq('user_id', userId)
-      .gte('created_at', dateRange.start.toISOString());
+      .gte('created_at', dateRange.start.toISOString())
+      .lte('created_at', dateRange.end.toISOString());
 
     const trend: Array<{ week: string; count: number }> = [];
     let currentWeek = 0;
@@ -150,7 +170,7 @@ export class ExecutiveDashboardService {
   }> {
     const { data: revisits } = await this.supabase
       .from('decision_revisits')
-      .select('*, tasks(*)')
+      .select('*, tasks(id, description, user_id)')
       .order('revisit_count', { ascending: false })
       .limit(5);
 

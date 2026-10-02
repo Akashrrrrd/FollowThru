@@ -1,5 +1,6 @@
 import { createClient } from '@supabase/supabase-js';
 import { getEmailProvider } from './email-provider';
+import { Anthropic } from '@anthropic-ai/sdk';
 
 interface ResponsiblePerson {
   id: string;
@@ -21,9 +22,18 @@ interface CompletionNotificationDraft {
 export class CompletionNotificationService {
   private supabase: any;
   private emailProvider = getEmailProvider();
+  private claudeClient: Anthropic | null;
 
   constructor(supabase: any) {
     this.supabase = supabase;
+    // Initialize Claude client only if API key is available
+    if (process.env.ANTHROPIC_API_KEY) {
+      this.claudeClient = new Anthropic({
+        apiKey: process.env.ANTHROPIC_API_KEY,
+      });
+    } else {
+      this.claudeClient = null;
+    }
   }
 
   /**
@@ -73,7 +83,20 @@ export class CompletionNotificationService {
   }
 
   /**
-   * Generate completion email (AI-ready placeholder)
+   * Auto-detect or infer responsible person from task metadata
+   */
+  async inferResponsiblePerson(taskId: string, userId: string): Promise<ResponsiblePerson | null> {
+    // First check if one is already saved
+    const existing = await this.getResponsiblePerson(taskId);
+    if (existing) return existing;
+
+    // Try to infer from task owner or meeting context
+    // For now, return null and let the API caller explicitly set it
+    return null;
+  }
+
+  /**
+   * Generate completion email using Claude AI
    */
   async generateCompletionEmail(
     taskDescription: string,
@@ -83,8 +106,113 @@ export class CompletionNotificationService {
     recipientName: string,
     completionDate: string,
   ): Promise<{ subject: string; body: string }> {
-    // This is a template. Real implementation would call OpenAI/Claude API
-    const subject = `Completion Confirmation: ${taskDescription.substring(0, 50)}...`;
+    // If Claude is not available, use fallback template
+    if (!this.claudeClient) {
+      return this.generateFallbackCompletionEmail(
+        taskDescription,
+        owner,
+        meetingContext,
+        sourceQuote,
+        recipientName,
+        completionDate,
+      );
+    }
+
+    try {
+      const prompt = `
+You are a professional business communication assistant. Generate a professional and warm completion confirmation email.
+
+Task Details:
+- Task: ${taskDescription}
+- Owner: ${owner}
+- Completed on: ${completionDate}
+- Original Meeting Context: ${meetingContext}
+- Original Commitment Quote: "${sourceQuote}"
+- Recipient: ${recipientName}
+
+Generate a professional email that:
+1. Confirms the task completion with appreciation
+2. References the original commitment
+3. Mentions the meeting context naturally
+4. Is warm but professional in tone
+5. Is concise (2-3 short paragraphs)
+
+Format your response as JSON with keys "subject" and "body".
+`;
+
+      const message = await this.claudeClient.messages.create({
+        model: 'claude-3-5-sonnet-20241022',
+        max_tokens: 500,
+        messages: [
+          {
+            role: 'user',
+            content: prompt,
+          },
+        ],
+      });
+
+      const content = message.content[0];
+      if (content.type === 'text') {
+        try {
+          const parsed = JSON.parse(content.text);
+          return {
+            subject: parsed.subject || `Completion Confirmation: ${taskDescription.substring(0, 50)}...`,
+            body: parsed.body || this.generateFallbackCompletionEmail(
+              taskDescription,
+              owner,
+              meetingContext,
+              sourceQuote,
+              recipientName,
+              completionDate,
+            ).body,
+          };
+        } catch {
+          // If JSON parsing fails, fallback to template
+          return this.generateFallbackCompletionEmail(
+            taskDescription,
+            owner,
+            meetingContext,
+            sourceQuote,
+            recipientName,
+            completionDate,
+          );
+        }
+      }
+
+      return this.generateFallbackCompletionEmail(
+        taskDescription,
+        owner,
+        meetingContext,
+        sourceQuote,
+        recipientName,
+        completionDate,
+      );
+    } catch (err) {
+      console.error('Claude API error in email generation:', err);
+      // Fallback to template on error
+      return this.generateFallbackCompletionEmail(
+        taskDescription,
+        owner,
+        meetingContext,
+        sourceQuote,
+        recipientName,
+        completionDate,
+      );
+    }
+  }
+
+  /**
+   * Fallback email template (used when Claude unavailable)
+   */
+  private generateFallbackCompletionEmail(
+    taskDescription: string,
+    owner: string,
+    meetingContext: string,
+    sourceQuote: string,
+    recipientName: string,
+    completionDate: string,
+  ): { subject: string; body: string } {
+    const subject = `Completion Confirmation: ${taskDescription.substring(0, 50)}${taskDescription.length > 50 ? '...' : ''}`;
 
     const body = `
 Dear ${recipientName},
@@ -144,9 +272,13 @@ FollowThru Team
     notificationId: string,
     updates: { subject?: string; emailBody?: string },
   ): Promise<void> {
+    const updateData: Record<string, any> = {};
+    if (updates.subject !== undefined) updateData.subject = updates.subject;
+    if (updates.emailBody !== undefined) updateData.email_body = updates.emailBody;
+
     await this.supabase
       .from('completion_notifications')
-      .update(updates)
+      .update(updateData)
       .eq('id', notificationId)
       .eq('status', 'draft');
   }
@@ -164,6 +296,7 @@ FollowThru Team
       .single();
 
     if (fetchError) throw fetchError;
+    if (!notification) throw new Error('Notification not found or not in draft status');
 
     // Send email via provider (Resend or Console)
     const emailSent = await this.emailProvider.send(
@@ -177,7 +310,7 @@ FollowThru Team
       .from('completion_notifications')
       .update({
         status: emailSent ? 'sent' : 'failed',
-        sent_at: new Date(),
+        sent_at: new Date().toISOString(),
       })
       .eq('id', notificationId);
 
@@ -226,5 +359,86 @@ FollowThru Team
       emailBody: row.email_body,
       status: row.status,
     }));
+  }
+
+  /**
+   * Auto-create completion notification when task is marked complete
+   * This is called from the task update endpoint when status changes to 'completed'
+   */
+  async autoCreateCompletionNotification(
+    taskId: string,
+    userId: string,
+  ): Promise<string | null> {
+    try {
+      // Get task details
+      const { data: task } = await this.supabase
+        .from('tasks')
+        .select('*')
+        .eq('id', taskId)
+        .single();
+
+      if (!task) return null;
+
+      // Try to get responsible person (if none set, infer from owner or return null)
+      let responsible = await this.getResponsiblePerson(taskId);
+      if (!responsible) {
+        // TODO: Implement logic to infer from owner or task context
+        // For now, just return null to let the user explicitly add one
+        return null;
+      }
+
+      // Get meeting context for email
+      let meetingContext = 'Commitment from meeting';
+      let sourceQuote = task.source_quote || task.description;
+
+      if (task.meeting_id) {
+        const { data: meeting } = await this.supabase
+          .from('meetings')
+          .select('topic')
+          .eq('id', task.meeting_id)
+          .single();
+
+        if (meeting?.topic) {
+          meetingContext = `From meeting: ${meeting.topic}`;
+        }
+
+        // Try to get evidence with quote
+        const { data: evidence } = await this.supabase
+          .from('commitment_evidence')
+          .select('quote')
+          .eq('task_id', taskId)
+          .order('created_at', { ascending: false })
+          .limit(1)
+          .single();
+
+        if (evidence?.quote) {
+          sourceQuote = evidence.quote;
+        }
+      }
+
+      // Generate email using AI
+      const { subject, body } = await this.generateCompletionEmail(
+        task.description,
+        task.owner,
+        meetingContext,
+        sourceQuote,
+        responsible.name,
+        new Date().toLocaleDateString('en-US'),
+      );
+
+      // Create draft notification
+      const notificationId = await this.createDraftNotification(
+        taskId,
+        responsible.email,
+        responsible.name,
+        subject,
+        body,
+      );
+
+      return notificationId;
+    } catch (err) {
+      console.error('Error auto-creating completion notification:', err);
+      return null;
+    }
   }
 }

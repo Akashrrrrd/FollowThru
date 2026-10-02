@@ -36,6 +36,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select';
+import { CompletionEmailModal } from '@/components/completion-email-modal';
 import { isValidTransition, getStatusLabel } from '@/lib/lifecycle';
 import type { Task, ConfidenceLevel, CommitmentType, TaskStatus } from '@/lib/types';
 
@@ -128,6 +129,7 @@ export function TaskCard({
   const [editOwner, setEditOwner] = useState(task.owner);
   const [editDueDate, setEditDueDate] = useState(toDateInput(task.due_date));
   const [editSaving, setEditSaving] = useState(false);
+  const [showCompletionModal, setShowCompletionModal] = useState(false);
 
   const [nudgeLoading, setNudgeLoading] = useState(false);
   const [nudgeMessage, setNudgeMessage] = useState<string | null>(null);
@@ -164,6 +166,11 @@ export function TaskCard({
     try {
       console.log('Changing status from', task.status, 'to', newStatus);
       onStatusChange(task.id, newStatus);
+      
+      // Show completion email modal if transitioning to completed
+      if ((newStatus === 'completed' || newStatus === 'done') && task.status !== newStatus) {
+        setTimeout(() => setShowCompletionModal(true), 500);
+      }
     } catch (err) {
       console.error('Status change error in TaskCard:', err);
     } finally {
@@ -216,13 +223,14 @@ export function TaskCard({
   };
 
   return (
-    <div
-      className={cn(
-        'rounded-lg border bg-white p-5 shadow-sm transition-shadow hover:shadow-md',
-        carriedOver ? 'border-blue-200 bg-blue-50/30' : 'border-gray-200',
-        isDone && 'opacity-75',
-      )}
-    >
+    <>
+      <div
+        className={cn(
+          'rounded-lg border bg-white p-5 shadow-sm transition-shadow hover:shadow-md',
+          carriedOver ? 'border-blue-200 bg-blue-50/30' : 'border-gray-200',
+          isDone && 'opacity-75',
+        )}
+      >
       {carriedOver && (
         <div className="mb-2">
           <span className="inline-flex items-center rounded-full bg-blue-100 px-2 py-0.5 text-xs font-medium text-blue-700">
@@ -508,6 +516,13 @@ export function TaskCard({
           </Collapsible>
         </>
       )}
-    </div>
+      </div>
+      <CompletionEmailModal
+        open={showCompletionModal}
+        taskId={task.id}
+        taskDescription={task.description}
+        onClose={() => setShowCompletionModal(false)}
+      />
+    </>
   );
 }

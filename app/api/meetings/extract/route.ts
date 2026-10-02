@@ -5,6 +5,7 @@ import { resolveDateExpression, isDependencyExpression } from '@/lib/date-resolv
 import { linkCommitmentsToPrevious, saveContinuityEvents } from '@/lib/commitment-linker';
 import { validatePipeline, StageContext, formatPipelineReport } from '@/lib/pipeline-validator';
 import { logRejections } from '@/lib/pipeline-error-handler';
+import { HallucinationDetector } from '@/lib/hallucination-detector';
 import type { ExtractedCommitment } from '@/lib/types';
 
 export const dynamic = 'force-dynamic';
@@ -221,6 +222,34 @@ export async function POST(req: NextRequest) {
           console.error('Failed to insert tasks:', tasksError.message);
           extractionError = 'Commitments were extracted but could not be saved to the database.';
         } else if (insertedTasks) {
+          // Hallucination Detection: Check each inserted task against the transcript
+          const hallucinationDetector = new HallucinationDetector(supabase);
+          
+          for (const task of insertedTasks) {
+            try {
+              const checkResult = await hallucinationDetector.checkExtraction(
+                trimmedTranscript,
+                task.description,
+                task.owner,
+                task.due_date || 'No deadline'
+              );
+
+              if (checkResult.isHallucination) {
+                // Flag for review and set grace period
+                await hallucinationDetector.flagHallucination(
+                  meeting.id,
+                  task.id,
+                  checkResult.reason,
+                  checkResult.confidence
+                );
+                console.log(`[HALLUCINATION] Flagged task ${task.id} for review: ${checkResult.reason}`);
+              }
+            } catch (err) {
+              console.error(`Error checking hallucination for task ${task.id}:`, err);
+              // Non-blocking: continue processing other tasks
+            }
+          }
+
           // Continuity: link commitments with earlier ones
           const linkResult = await linkCommitmentsToPrevious(
             insertedTasks as any,

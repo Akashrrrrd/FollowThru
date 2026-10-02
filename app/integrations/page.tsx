@@ -63,8 +63,22 @@ function IntegrationsContent() {
   useEffect(() => {
     const fetchIntegrations = async () => {
       try {
-        const res = await fetch('/api/integrations');
-        if (!res.ok) throw new Error('Failed to fetch');
+        const res = await fetch('/api/integrations', {
+          method: 'GET',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          credentials: 'include',
+        });
+
+        if (!res.ok) {
+          console.warn(`Integration fetch returned ${res.status}`);
+          // If fetch fails, just show templates without connected status
+          setIntegrations(INTEGRATION_TEMPLATES);
+          setLoading(false);
+          return;
+        }
+
         const data = await res.json();
 
         // Merge fetched data with templates
@@ -76,8 +90,8 @@ function IntegrationsContent() {
 
         setIntegrations(merged);
       } catch (err) {
-        console.error('Fetch error:', err);
-        setError('Failed to load integrations');
+        console.error('Fetch integrations error:', err);
+        // Fall back to templates if fetch fails
         setIntegrations(INTEGRATION_TEMPLATES);
       } finally {
         setLoading(false);
@@ -88,10 +102,15 @@ function IntegrationsContent() {
   }, []);
 
   const handleConnect = (provider: string) => {
-    // Redirect to OAuth callback
-    const redirectUri = `${window.location.origin}/api/integrations/oauth/callback`;
-    const authUrl = `/api/integrations/connect?provider=${provider}&redirect_uri=${encodeURIComponent(redirectUri)}`;
-    window.location.href = authUrl;
+    try {
+      // Redirect to OAuth connect endpoint
+      const origin = typeof window !== 'undefined' ? window.location.origin : '';
+      const authUrl = `/api/integrations/connect?provider=${provider}&redirect_uri=${encodeURIComponent(`${origin}/api/integrations/oauth/callback`)}`;
+      window.location.href = authUrl;
+    } catch (err) {
+      console.error('Connect error:', err);
+      setError(`Failed to connect ${provider}. Please try again.`);
+    }
   };
 
   const handleDisconnect = async (provider: string) => {

@@ -13,31 +13,122 @@ export async function POST(request: NextRequest) {
     const body = await request.json();
     const {
       task_id,
+      action = 'create_draft',
       recipient_email,
       recipient_name,
       subject,
       email_body,
     } = body;
 
-    if (!task_id || !recipient_email || !recipient_name || !subject || !email_body) {
+    if (!task_id) {
       return NextResponse.json(
-        { error: 'Missing required fields' },
+        { error: 'task_id required' },
         { status: 400 },
       );
     }
 
     const supabase = createServerClient();
+
+    // Verify task ownership
+    const { data: task } = await supabase
+      .from('tasks')
+      .select('id, user_id')
+      .eq('id', task_id)
+      .single();
+
+    if (!task || task.user_id !== userResult.userId) {
+      return NextResponse.json({ error: 'Task not found' }, { status: 404 });
+    }
+
     const service = new CompletionNotificationService(supabase);
 
-    const notificationId = await service.createDraftNotification(
-      task_id,
-      recipient_email,
-      recipient_name,
-      subject,
-      email_body,
-    );
+    // If action is generate_email, generate it with Claude
+    if (action === 'generate_email') {
+      if (!recipient_name) {
+        return NextResponse.json(
+          { error: 'recipient_name required for email generation' },
+          { status: 400 },
+        );
+      }
 
-    return NextResponse.json({ id: notificationId, status: 'draft' });
+      // Get task details
+      const { data: fullTask } = await supabase
+        .from('tasks')
+        .select('*')
+        .eq('id', task_id)
+        .single();
+
+      if (!fullTask) {
+        return NextResponse.json({ error: 'Task not found' }, { status: 404 });
+      }
+
+      // Get meeting context
+      let meetingContext = 'Commitment from meeting';
+      let sourceQuote = fullTask.source_quote || fullTask.description;
+
+      if (fullTask.meeting_id) {
+        const { data: meeting } = await supabase
+          .from('meetings')
+          .select('topic')
+          .eq('id', fullTask.meeting_id)
+          .single();
+
+        if (meeting?.topic) {
+          meetingContext = `From meeting: ${meeting.topic}`;
+        }
+
+        // Try to get evidence with quote
+        const { data: evidence } = await supabase
+          .from('commitment_evidence')
+          .select('quote')
+          .eq('task_id', task_id)
+          .order('created_at', { ascending: false })
+          .limit(1)
+          .single();
+
+        if (evidence?.quote) {
+          sourceQuote = evidence.quote;
+        }
+      }
+
+      // Generate email
+      const emailData = await service.generateCompletionEmail(
+        fullTask.description,
+        fullTask.owner,
+        meetingContext,
+        sourceQuote,
+        recipient_name,
+        new Date().toLocaleDateString('en-US'),
+      );
+
+      return NextResponse.json({
+        generated: true,
+        subject: emailData.subject,
+        body: emailData.body,
+      });
+    }
+
+    // If action is create_draft or explicit
+    if (action === 'create_draft') {
+      if (!recipient_email || !recipient_name || !subject || !email_body) {
+        return NextResponse.json(
+          { error: 'recipient_email, recipient_name, subject, and email_body required' },
+          { status: 400 },
+        );
+      }
+
+      const notificationId = await service.createDraftNotification(
+        task_id,
+        recipient_email,
+        recipient_name,
+        subject,
+        email_body,
+      );
+
+      return NextResponse.json({ id: notificationId, status: 'draft' });
+    }
+
+    return NextResponse.json({ error: 'Invalid action' }, { status: 400 });
   } catch (error) {
     console.error('Create notification error:', error);
     return NextResponse.json(
@@ -60,8 +151,19 @@ export async function GET(request: NextRequest) {
     }
 
     const supabase = createServerClient();
-    const service = new CompletionNotificationService(supabase);
 
+    // Verify task ownership
+    const { data: task } = await supabase
+      .from('tasks')
+      .select('id, user_id')
+      .eq('id', taskId)
+      .single();
+
+    if (!task || task.user_id !== userResult.userId) {
+      return NextResponse.json({ error: 'Task not found' }, { status: 404 });
+    }
+
+    const service = new CompletionNotificationService(supabase);
     const history = await service.getNotificationHistory(taskId);
 
     return NextResponse.json({ history });
@@ -92,6 +194,28 @@ export async function PATCH(request: NextRequest) {
     }
 
     const supabase = createServerClient();
+
+    // Verify ownership by checking task
+    const { data: notification } = await supabase
+      .from('completion_notifications')
+      .select('task_id')
+      .eq('id', notification_id)
+      .single();
+
+    if (!notification) {
+      return NextResponse.json({ error: 'Notification not found' }, { status: 404 });
+    }
+
+    const { data: task } = await supabase
+      .from('tasks')
+      .select('user_id')
+      .eq('id', notification.task_id)
+      .single();
+
+    if (!task || task.user_id !== userResult.userId) {
+      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+    }
+
     const service = new CompletionNotificationService(supabase);
 
     if (action === 'send') {

@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useState, useCallback } from 'react';
-import { AlertCircle, RefreshCw, Calendar, Loader2, ChevronDown, ChevronUp, Flag } from 'lucide-react';
+import { AlertCircle, RefreshCw, Calendar, Loader2, ChevronDown, ChevronUp, Flag, AlertTriangle } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
@@ -15,6 +15,8 @@ interface UnresolvedCommitment {
   status: string;
   days_outstanding?: number;
   blocker?: boolean;
+  blocker_text?: string;
+  is_circular?: boolean;
   meeting_title?: string;
 }
 
@@ -41,6 +43,7 @@ export function UnresolvedCommitmentsScreen({
   const [blockerFilter, setBlockerFilter] = useState<string>('all');
 
   const [owners, setOwners] = useState<string[]>([]);
+  const [circularDependencies, setCircularDependencies] = useState<Set<string>>(new Set());
 
   const fetchUnresolved = useCallback(async () => {
     setLoading(true);
@@ -70,6 +73,9 @@ export function UnresolvedCommitmentsScreen({
         new Set(unresolved.map((t) => t.owner))
       ).sort();
       setOwners(uniqueOwners);
+
+      // Detect circular dependencies
+      detectCircularDeps(unresolved);
     } catch (err) {
       console.error('Fetch unresolved error:', err);
       setError(
@@ -81,6 +87,29 @@ export function UnresolvedCommitmentsScreen({
     } finally {
       setLoading(false);
     }
+  }, []);
+
+  const detectCircularDeps = useCallback((tasks: UnresolvedCommitment[]) => {
+    // Simple cycle detection: check if any blocker creates a cycle
+    const circularSet = new Set<string>();
+    
+    for (const task of tasks) {
+      if (task.blocker_text) {
+        // Check if the blocker points back to this task (simple cycle)
+        for (const otherTask of tasks) {
+          if (otherTask.id !== task.id && 
+              otherTask.blocker_text &&
+              (otherTask.blocker_text.includes(task.description) || 
+               otherTask.blocker_text.includes(task.id))) {
+            // Potential cycle detected
+            circularSet.add(task.id);
+            circularSet.add(otherTask.id);
+          }
+        }
+      }
+    }
+
+    setCircularDependencies(circularSet);
   }, []);
 
   useEffect(() => {
@@ -100,9 +129,17 @@ export function UnresolvedCommitmentsScreen({
       filtered = filtered.filter((c) => !c.blocker && c.status !== 'blocked');
     }
 
-    filtered.sort((a, b) => (b.days_outstanding || 0) - (a.days_outstanding || 0));
+    // Sort: circular first, then by urgency
+    filtered.sort((a, b) => {
+      const aCircular = circularDependencies.has(a.id) ? 1 : 0;
+      const bCircular = circularDependencies.has(b.id) ? 1 : 0;
+      if (aCircular !== bCircular) return bCircular - aCircular;
+      
+      return (b.days_outstanding || 0) - (a.days_outstanding || 0);
+    });
+    
     setFilteredCommitments(filtered);
-  }, [commitments, ownerFilter, statusFilter, blockerFilter]);
+  }, [commitments, ownerFilter, statusFilter, blockerFilter, circularDependencies]);
 
   useEffect(() => {
     fetchUnresolved();
@@ -123,12 +160,23 @@ export function UnresolvedCommitmentsScreen({
     );
   }
 
+  const circularCount = circularDependencies.size;
+
   return (
     <div className={className}>
       {error && (
         <Alert variant="destructive" className="mb-6">
           <AlertCircle className="h-4 w-4" />
           <AlertDescription>{error}</AlertDescription>
+        </Alert>
+      )}
+
+      {circularCount > 0 && (
+        <Alert variant="destructive" className="mb-6">
+          <AlertTriangle className="h-4 w-4" />
+          <AlertDescription>
+            ⚠️ {circularCount} commitment(s) have circular dependencies. These need to be resolved to unblock work.
+          </AlertDescription>
         </Alert>
       )}
 
@@ -139,6 +187,7 @@ export function UnresolvedCommitmentsScreen({
           </h2>
           <p className="text-sm text-gray-600">
             {commitments.length} total commitments tracked
+            {circularCount > 0 && ` • ${circularCount} circular`}
           </p>
         </div>
         <Button onClick={handleRefresh} disabled={refreshing} variant="outline">
@@ -192,64 +241,92 @@ export function UnresolvedCommitmentsScreen({
         </Card>
       ) : (
         <div className="space-y-3">
-          {filteredCommitments.map((commitment) => (
-            <Card
-              key={commitment.id}
-              className="cursor-pointer hover:shadow-md transition-shadow"
-              onClick={() => onTaskSelect?.(commitment)}
-            >
-              <CardHeader className="pb-3">
-                <div className="flex items-start justify-between">
-                  <div className="flex-1">
-                    <CardTitle className="text-base">{commitment.description}</CardTitle>
-                    <div className="flex gap-2 mt-2">
-                      <Badge variant="outline">{commitment.owner}</Badge>
-                      <Badge>{commitment.status}</Badge>
-                      {commitment.blocker && <Badge variant="destructive">Blocked</Badge>}
+          {filteredCommitments.map((commitment) => {
+            const isCircular = circularDependencies.has(commitment.id);
+            
+            return (
+              <Card
+                key={commitment.id}
+                className={`cursor-pointer hover:shadow-md transition-shadow ${
+                  isCircular ? 'border-red-300 bg-red-50' : ''
+                }`}
+                onClick={() => onTaskSelect?.(commitment)}
+              >
+                <CardHeader className="pb-3">
+                  <div className="flex items-start justify-between">
+                    <div className="flex-1">
+                      <CardTitle className="text-base">{commitment.description}</CardTitle>
+                      <div className="flex gap-2 mt-2 flex-wrap">
+                        <Badge variant="outline">{commitment.owner}</Badge>
+                        <Badge>{commitment.status}</Badge>
+                        {commitment.blocker && <Badge variant="destructive">Blocked</Badge>}
+                        {isCircular && (
+                          <Badge variant="destructive" className="bg-red-600">
+                            <AlertTriangle className="h-3 w-3 mr-1" />
+                            Circular
+                          </Badge>
+                        )}
+                      </div>
                     </div>
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setExpandedId(expandedId === commitment.id ? null : commitment.id);
+                      }}
+                      className="ml-2"
+                    >
+                      {expandedId === commitment.id ? (
+                        <ChevronUp className="h-5 w-5" />
+                      ) : (
+                        <ChevronDown className="h-5 w-5" />
+                      )}
+                    </button>
                   </div>
-                  <button
-                    onClick={() =>
-                      setExpandedId(expandedId === commitment.id ? null : commitment.id)
-                    }
-                    className="ml-2"
-                  >
-                    {expandedId === commitment.id ? (
-                      <ChevronUp className="h-5 w-5" />
-                    ) : (
-                      <ChevronDown className="h-5 w-5" />
-                    )}
-                  </button>
-                </div>
-              </CardHeader>
+                </CardHeader>
 
-              {expandedId === commitment.id && (
-                <CardContent className="pt-0 border-t">
-                  <div className="space-y-3 mt-3">
-                    <div className="flex items-center gap-2">
-                      <Calendar className="h-4 w-4 text-gray-400" />
-                      <span className="text-sm">
-                        Due: {commitment.due_date || 'No deadline'}
-                      </span>
-                    </div>
-                    {commitment.days_outstanding && commitment.days_outstanding > 0 && (
-                      <div className="flex items-center gap-2 text-red-600">
-                        <Flag className="h-4 w-4" />
-                        <span className="text-sm font-medium">
-                          {commitment.days_outstanding} days overdue
+                {expandedId === commitment.id && (
+                  <CardContent className="pt-0 border-t">
+                    <div className="space-y-3 mt-3">
+                      <div className="flex items-center gap-2">
+                        <Calendar className="h-4 w-4 text-gray-400" />
+                        <span className="text-sm">
+                          Due: {commitment.due_date || 'No deadline'}
                         </span>
                       </div>
-                    )}
-                    {commitment.meeting_title && (
-                      <div className="text-sm text-gray-600">
-                        From: {commitment.meeting_title}
-                      </div>
-                    )}
-                  </div>
-                </CardContent>
-              )}
-            </Card>
-          ))}
+                      {commitment.days_outstanding && commitment.days_outstanding > 0 && (
+                        <div className="flex items-center gap-2 text-red-600">
+                          <Flag className="h-4 w-4" />
+                          <span className="text-sm font-medium">
+                            {commitment.days_outstanding} days overdue
+                          </span>
+                        </div>
+                      )}
+                      {commitment.blocker_text && (
+                        <div className="bg-yellow-50 border border-yellow-200 rounded p-2">
+                          <p className="text-xs font-medium text-yellow-900">Blocked by:</p>
+                          <p className="text-xs text-yellow-800 mt-1">{commitment.blocker_text}</p>
+                        </div>
+                      )}
+                      {isCircular && (
+                        <div className="bg-red-50 border border-red-200 rounded p-2">
+                          <p className="text-xs font-medium text-red-900 flex items-center">
+                            <AlertTriangle className="h-3 w-3 mr-1" />
+                            Circular Dependency Detected
+                          </p>
+                          <p className="text-xs text-red-700 mt-1">This commitment has circular blockers. Resolve dependencies to unblock.</p>
+                        </div>
+                      )}
+                      {commitment.meeting_title && (
+                        <div className="text-sm text-gray-600">
+                          From: {commitment.meeting_title}
+                        </div>
+                      )}
+                    </div>
+                  </CardContent>
+                )}
+              </Card>
+            );
+          })}
         </div>
       )}
     </div>

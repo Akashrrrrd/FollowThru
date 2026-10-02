@@ -1,8 +1,10 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createServerClient } from '@/lib/supabase-server';
+import { BidirectionalSyncService } from '@/lib/integrations/bidirectional-sync';
 
 /**
  * Cron job that runs every 15 minutes to sync connected integrations
+ * Handles both forward sync (external → FollowThru) and reverse sync (FollowThru → external)
  * Triggered by external cron service (Vercel Cron, etc.)
  */
 export async function POST(request: NextRequest) {
@@ -14,11 +16,12 @@ export async function POST(request: NextRequest) {
     }
 
     const supabase = createServerClient();
+    const syncService = new BidirectionalSyncService(supabase);
 
     // Get all active integrations
     const { data: integrations, error: fetchError } = await supabase
       .from('integration_clients')
-      .select('id, user_id, provider, access_token, last_synced')
+      .select('id, user_id, provider, access_token, refresh_token, expires_at, client_id, client_secret')
       .not('access_token', 'is', null);
 
     if (fetchError) throw fetchError;
@@ -27,6 +30,7 @@ export async function POST(request: NextRequest) {
 
     for (const integration of integrations || []) {
       try {
+        // Forward sync: fetch from external platform and import into FollowThru
         if (integration.provider === 'jira') {
           await syncJira(supabase, integration.user_id, integration.access_token);
         } else if (integration.provider === 'asana') {
@@ -37,10 +41,13 @@ export async function POST(request: NextRequest) {
           await syncClickUp(supabase, integration.user_id, integration.access_token);
         }
 
+        // Reverse sync: push any pending FollowThru changes back to external platform
+        await reverseSync(supabase, syncService, integration.user_id, integration.provider);
+
         // Update last_synced timestamp
         await supabase
           .from('integration_clients')
-          .update({ last_synced: new Date() })
+          .update({ last_synced: new Date().toISOString() })
           .eq('id', integration.id);
 
         results.push({ provider: integration.provider, status: 'success' });
@@ -64,6 +71,30 @@ export async function POST(request: NextRequest) {
   }
 }
 
+/**
+ * Reverse sync: push FollowThru changes back to external platforms
+ */
+async function reverseSync(
+  supabase: any,
+  syncService: BidirectionalSyncService,
+  userId: string,
+  provider: string,
+): Promise<void> {
+  // Get tasks that were synced from this provider and have been modified
+  const { data: tasks } = await supabase
+    .from('tasks')
+    .select('*')
+    .eq('user_id', userId)
+    .like('source', `${provider}:%`)
+    .gt('updated_at', supabase.rpc('get_integration_last_sync', { user_id: userId, provider }));
+
+  if (!tasks || tasks.length === 0) return;
+
+  for (const task of tasks) {
+    await syncService.syncTaskToProvider(userId, provider, task);
+  }
+}
+
 async function syncJira(supabase: any, userId: string, accessToken: string) {
   // Fetch issues from Jira
   const res = await fetch('https://api.atlassian.com/rest/api/3/issues/search', {
@@ -81,7 +112,7 @@ async function syncJira(supabase: any, userId: string, accessToken: string) {
     // Check if already exists
     const { data: existing } = await supabase
       .from('tasks')
-      .select('id')
+      .select('id, updated_at')
       .eq('user_id', userId)
       .eq('source', source)
       .single();
@@ -97,16 +128,24 @@ async function syncJira(supabase: any, userId: string, accessToken: string) {
         source,
       });
     } else {
-      // Update existing task
-      await supabase
-        .from('tasks')
-        .update({
-          description: issue.fields.summary,
-          owner: issue.fields.assignee?.displayName || 'Unassigned',
-          due_date: issue.fields.duedate,
-          status: mapJiraStatus(issue.fields.status.name),
-        })
-        .eq('id', existing.id);
+      // Update existing task (conflict resolution: last-write-wins)
+      const externalUpdatedAt = new Date(issue.updated);
+      const followthruUpdatedAt = new Date(existing.updated_at);
+
+      if (externalUpdatedAt > followthruUpdatedAt) {
+        // External is newer, update FollowThru
+        await supabase
+          .from('tasks')
+          .update({
+            description: issue.fields.summary,
+            owner: issue.fields.assignee?.displayName || 'Unassigned',
+            due_date: issue.fields.duedate,
+            status: mapJiraStatus(issue.fields.status.name),
+            updated_at: new Date().toISOString(),
+          })
+          .eq('id', existing.id);
+      }
+      // If FollowThru is newer or equal, don't update (let reverse sync handle it)
     }
   }
 }
@@ -125,7 +164,7 @@ async function syncAsana(supabase: any, userId: string, accessToken: string) {
 
     const { data: existing } = await supabase
       .from('tasks')
-      .select('id')
+      .select('id, updated_at')
       .eq('user_id', userId)
       .eq('source', source)
       .single();
@@ -140,15 +179,21 @@ async function syncAsana(supabase: any, userId: string, accessToken: string) {
         source,
       });
     } else {
-      await supabase
-        .from('tasks')
-        .update({
-          description: task.name,
-          owner: task.assignee?.name || 'Unassigned',
-          due_date: task.due_on,
-          status: task.completed ? 'completed' : 'open',
-        })
-        .eq('id', existing.id);
+      const externalUpdatedAt = new Date(task.modified_at);
+      const followthruUpdatedAt = new Date(existing.updated_at);
+
+      if (externalUpdatedAt > followthruUpdatedAt) {
+        await supabase
+          .from('tasks')
+          .update({
+            description: task.name,
+            owner: task.assignee?.name || 'Unassigned',
+            due_date: task.due_on,
+            status: task.completed ? 'completed' : 'open',
+            updated_at: new Date().toISOString(),
+          })
+          .eq('id', existing.id);
+      }
     }
   }
 }
@@ -169,6 +214,7 @@ async function syncMonday(supabase: any, userId: string, accessToken: string) {
               id
               name
               state
+              updated_at
               due_date
               owner {
                 name
@@ -181,7 +227,54 @@ async function syncMonday(supabase: any, userId: string, accessToken: string) {
   });
 
   if (!res.ok) throw new Error('Monday API error');
-  // Implementation similar to above
+
+  const data = await res.json();
+
+  // Flatten items from all boards
+  const allItems: any[] = [];
+  if (data.data?.me?.boards) {
+    for (const board of data.data.me.boards) {
+      allItems.push(...(board.items || []));
+    }
+  }
+
+  for (const item of allItems) {
+    const source = `monday:${item.id}`;
+
+    const { data: existing } = await supabase
+      .from('tasks')
+      .select('id, updated_at')
+      .eq('user_id', userId)
+      .eq('source', source)
+      .single();
+
+    if (!existing) {
+      await supabase.from('tasks').insert({
+        user_id: userId,
+        description: item.name,
+        owner: item.owner?.name || 'Unassigned',
+        due_date: item.due_date,
+        status: item.state || 'open',
+        source,
+      });
+    } else {
+      const externalUpdatedAt = new Date(item.updated_at);
+      const followthruUpdatedAt = new Date(existing.updated_at);
+
+      if (externalUpdatedAt > followthruUpdatedAt) {
+        await supabase
+          .from('tasks')
+          .update({
+            description: item.name,
+            owner: item.owner?.name || 'Unassigned',
+            due_date: item.due_date,
+            status: item.state || 'open',
+            updated_at: new Date().toISOString(),
+          })
+          .eq('id', existing.id);
+      }
+    }
+  }
 }
 
 async function syncClickUp(supabase: any, userId: string, accessToken: string) {
@@ -198,7 +291,7 @@ async function syncClickUp(supabase: any, userId: string, accessToken: string) {
 
     const { data: existing } = await supabase
       .from('tasks')
-      .select('id')
+      .select('id, updated_at')
       .eq('user_id', userId)
       .eq('source', source)
       .single();
@@ -212,6 +305,22 @@ async function syncClickUp(supabase: any, userId: string, accessToken: string) {
         status: task.status.status.toLowerCase(),
         source,
       });
+    } else {
+      const externalUpdatedAt = new Date(task.updated_at);
+      const followthruUpdatedAt = new Date(existing.updated_at);
+
+      if (externalUpdatedAt > followthruUpdatedAt) {
+        await supabase
+          .from('tasks')
+          .update({
+            description: task.name,
+            owner: task.assignees[0]?.username || 'Unassigned',
+            due_date: task.due_date ? new Date(parseInt(task.due_date)).toISOString() : null,
+            status: task.status.status.toLowerCase(),
+            updated_at: new Date().toISOString(),
+          })
+          .eq('id', existing.id);
+      }
     }
   }
 }

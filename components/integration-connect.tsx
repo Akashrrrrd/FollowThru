@@ -23,14 +23,14 @@ interface IntegrationConnectProps {
   loading?: boolean;
 }
 
-const PROVIDER_INFO: Record<string, { color: string; icon: string; docs: string }> = {
-  jira: { color: 'bg-blue-50', icon: '🔵', docs: 'https://jira.atlassian.com' },
-  asana: { color: 'bg-indigo-50', icon: '🟣', docs: 'https://asana.com' },
-  monday: { color: 'bg-purple-50', icon: '📅', docs: 'https://monday.com' },
-  clickup: { color: 'bg-red-50', icon: '🔴', docs: 'https://clickup.com' },
-  slack: { color: 'bg-pink-50', icon: '💬', docs: 'https://slack.com' },
-  teams: { color: 'bg-sky-50', icon: '📘', docs: 'https://teams.microsoft.com' },
-  zoom: { color: 'bg-blue-100', icon: '📹', docs: 'https://zoom.us' },
+const PROVIDER_INFO: Record<string, { color: string; initials: string; docs: string }> = {
+  jira: { color: 'bg-blue-50 border-blue-200', initials: 'JI', docs: 'https://jira.atlassian.com' },
+  asana: { color: 'bg-indigo-50 border-indigo-200', initials: 'AS', docs: 'https://asana.com' },
+  monday: { color: 'bg-purple-50 border-purple-200', initials: 'MO', docs: 'https://monday.com' },
+  clickup: { color: 'bg-red-50 border-red-200', initials: 'CU', docs: 'https://clickup.com' },
+  slack: { color: 'bg-pink-50 border-pink-200', initials: 'SL', docs: 'https://slack.com' },
+  teams: { color: 'bg-sky-50 border-sky-200', initials: 'TE', docs: 'https://teams.microsoft.com' },
+  zoom: { color: 'bg-blue-100 border-blue-300', initials: 'ZM', docs: 'https://zoom.us' },
 };
 
 export function IntegrationConnect({
@@ -57,11 +57,13 @@ export function IntegrationConnect({
         const isDisconnecting = disconnecting === integration.provider;
 
         return (
-          <Card key={integration.provider} className={info.color}>
+          <Card key={integration.provider} className={`${info.color} border`}>
             <CardHeader>
               <div className="flex items-start justify-between">
-                <div className="flex items-center gap-2">
-                  <span className="text-2xl">{info.icon}</span>
+                <div className="flex items-center gap-3">
+                  <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-gray-200 text-xs font-bold text-gray-700">
+                    {info.initials}
+                  </div>
                   <div>
                     <CardTitle className="text-base">{integration.name}</CardTitle>
                     <p className="text-xs text-gray-600 mt-1">{integration.description}</p>

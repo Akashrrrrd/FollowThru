@@ -14,24 +14,35 @@ export class NudgeEngine {
     taskId: string,
     userId: string,
     message: string,
-    channel: 'email' | 'slack' | 'teams' = 'email',
+    channel?: 'email' | 'slack' | 'teams',
   ): Promise<string> {
+    // If channel not specified, get user's preference
+    let deliveryChannel = channel;
+    if (!deliveryChannel) {
+      const { data: prefs } = await this.supabase
+        .from('user_preferences')
+        .select('nudge_channel')
+        .eq('user_id', userId)
+        .single();
+      deliveryChannel = (prefs?.nudge_channel || 'email') as 'email' | 'slack' | 'teams';
+    }
+
     const { data, error } = await this.supabase
       .from('nudges')
       .insert({
         task_id: taskId,
         user_id: userId,
         message,
-        channel,
-        sent_at: new Date(),
+        channel: deliveryChannel,
+        sent_at: new Date().toISOString(),
       })
       .select('id')
       .single();
 
     if (error) throw error;
 
-    // Actually send the nudge
-    await this.deliverNudge(userId, message, channel);
+    // Actually deliver the nudge
+    await this.deliverNudge(userId, message, deliveryChannel);
 
     return data.id;
   }
@@ -49,17 +60,29 @@ export class NudgeEngine {
     } else if (channel === 'teams') {
       await this.sendTeamsNudge(userId, message);
     } else if (channel === 'email') {
-      // Email already handled by email provider
-      console.log(`[NUDGE EMAIL] ${message}`);
+      // Email delivery via email provider
+      console.log(`[NUDGE EMAIL] To: user ${userId}\n${message}`);
     }
   }
 
   /**
-   * Send nudge via Slack webhook
+   * Send nudge via Slack webhook with proper channel ID
    */
   private async sendSlackNudge(userId: string, message: string): Promise<void> {
     try {
-      // Get user's Slack webhook URL from integration
+      // Get user's Slack preferences
+      const { data: prefs } = await this.supabase
+        .from('user_preferences')
+        .select('slack_channel_id, slack_team_id')
+        .eq('user_id', userId)
+        .single();
+
+      if (!prefs?.slack_channel_id) {
+        console.warn(`Slack channel not configured for user ${userId}`);
+        return;
+      }
+
+      // Get Slack integration token
       const { data: integration } = await this.supabase
         .from('integration_clients')
         .select('access_token')
@@ -79,7 +102,7 @@ export class NudgeEngine {
           Authorization: `Bearer ${integration.access_token}`,
         },
         body: JSON.stringify({
-          channel: 'C0XXXXXXXX', // Would be stored per user
+          channel: prefs.slack_channel_id,
           text: message,
           blocks: [
             {
@@ -88,6 +111,20 @@ export class NudgeEngine {
                 type: 'mrkdwn',
                 text: `🔔 *FollowThru Reminder*\n${message}`,
               },
+            },
+            {
+              type: 'actions',
+              elements: [
+                {
+                  type: 'button',
+                  text: {
+                    type: 'plain_text',
+                    text: 'View Task',
+                  },
+                  url: `${process.env.NEXT_PUBLIC_APP_URL}/dashboard`,
+                  style: 'primary',
+                },
+              ],
             },
           ],
         }),
@@ -107,20 +144,19 @@ export class NudgeEngine {
    */
   private async sendTeamsNudge(userId: string, message: string): Promise<void> {
     try {
-      // Get user's Teams webhook URL
-      const { data: integration } = await this.supabase
-        .from('integration_clients')
-        .select('access_token')
+      // Get user's Teams preferences
+      const { data: prefs } = await this.supabase
+        .from('user_preferences')
+        .select('teams_webhook_url, teams_channel_id')
         .eq('user_id', userId)
-        .eq('provider', 'teams')
         .single();
 
-      if (!integration?.access_token) {
-        console.warn(`Teams integration not found for user ${userId}`);
+      if (!prefs?.teams_webhook_url) {
+        console.warn(`Teams webhook not configured for user ${userId}`);
         return;
       }
 
-      const response = await fetch(integration.access_token, {
+      const response = await fetch(prefs.teams_webhook_url, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -146,6 +182,13 @@ export class NudgeEngine {
                     wrap: true,
                   },
                 ],
+                actions: [
+                  {
+                    type: 'Action.OpenUrl',
+                    title: 'View Task',
+                    url: `${process.env.NEXT_PUBLIC_APP_URL}/dashboard`,
+                  },
+                ],
               },
             },
           ],
@@ -169,6 +212,7 @@ export class NudgeEngine {
       .select('*, tasks(*)')
       .eq('user_id', userId)
       .is('opened_at', null)
+      .is('dismissed_at', null)
       .order('sent_at', { ascending: true });
 
     return data || [];
@@ -180,7 +224,7 @@ export class NudgeEngine {
   async markNudgeOpened(nudgeId: string): Promise<void> {
     await this.supabase
       .from('nudges')
-      .update({ opened_at: new Date() })
+      .update({ opened_at: new Date().toISOString() })
       .eq('id', nudgeId);
   }
 
@@ -190,17 +234,50 @@ export class NudgeEngine {
   async dismissNudge(nudgeId: string): Promise<void> {
     await this.supabase
       .from('nudges')
-      .update({ dismissed_at: new Date() })
+      .update({ dismissed_at: new Date().toISOString() })
       .eq('id', nudgeId);
   }
 
   /**
-   * Generate nudge message
+   * Get nudge statistics for a user
+   */
+  async getNudgeStats(userId: string, days: number = 7): Promise<any> {
+    const startDate = new Date();
+    startDate.setDate(startDate.getDate() - days);
+
+    const { data } = await this.supabase
+      .from('nudges')
+      .select('channel')
+      .eq('user_id', userId)
+      .gte('sent_at', startDate.toISOString());
+
+    const stats = {
+      total: data?.length || 0,
+      by_channel: {
+        email: 0,
+        slack: 0,
+        teams: 0,
+      },
+    };
+
+    if (data) {
+      for (const nudge of data) {
+        stats.by_channel[nudge.channel as keyof typeof stats.by_channel]++;
+      }
+    }
+
+    return stats;
+  }
+
+  /**
+   * Generate nudge message for overdue task
    */
   generateNudgeMessage(taskDescription: string, daysOverdue: number, owner: string): string {
     if (daysOverdue === 0) {
-      return `Reminder: "${taskDescription}" is due today. Owner: ${owner}`;
+      return `📋 Reminder: "${taskDescription}" is due today.\nAssigned to: ${owner}`;
+    } else if (daysOverdue === 1) {
+      return `⚠️ Alert: "${taskDescription}" was due yesterday.\nAssigned to: ${owner}`;
     }
-    return `Alert: "${taskDescription}" is ${daysOverdue} days overdue. Owner: ${owner}`;
+    return `🚨 Urgent: "${taskDescription}" is ${daysOverdue} days overdue.\nAssigned to: ${owner}`;
   }
 }

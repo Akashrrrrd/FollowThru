@@ -11,7 +11,7 @@ export async function GET(request: NextRequest) {
 
     const supabase = createServerClient();
 
-    // Get tasks flagged for review with their hallucination flags
+    // Get tasks flagged for review with their hallucination flags and evidence
     const { data: tasks, error } = await supabase
       .from('tasks')
       .select(
@@ -20,12 +20,21 @@ export async function GET(request: NextRequest) {
         description,
         owner,
         grace_period_ends_at,
+        source_quote,
         hallucination_flags (
+          id,
           reason,
-          confidence
+          confidence,
+          resolved
+        ),
+        commitment_evidence (
+          quote,
+          timestamp_in_transcript
         ),
         meetings (
-          title
+          id,
+          title,
+          topic
         )
       `,
       )
@@ -36,16 +45,24 @@ export async function GET(request: NextRequest) {
     if (error) throw error;
 
     // Transform data for frontend
-    const transformedTasks = (tasks || []).map((task: any) => ({
-      id: task.id,
-      description: task.description,
-      owner: task.owner,
-      meeting_title: task.meetings?.title || 'Unknown Meeting',
-      source_quote: '', // Would be populated from evidence
-      flag_reason: task.hallucination_flags?.[0]?.reason || 'Potential hallucination detected',
-      confidence: task.hallucination_flags?.[0]?.confidence || 0.5,
-      grace_period_ends_at: task.grace_period_ends_at,
-    }));
+    const transformedTasks = (tasks || []).map((task: any) => {
+      const primaryFlag = task.hallucination_flags?.[0];
+      const primaryEvidence = task.commitment_evidence?.[0];
+
+      return {
+        id: task.id,
+        description: task.description,
+        owner: task.owner,
+        meeting_title: task.meetings?.title || task.meetings?.topic || 'Unknown Meeting',
+        meeting_id: task.meetings?.id,
+        source_quote: primaryEvidence?.quote || task.source_quote || '',
+        timestamp: primaryEvidence?.timestamp_in_transcript || null,
+        flag_reason: primaryFlag?.reason || 'Potential hallucination detected',
+        confidence: primaryFlag?.confidence || 0.5,
+        grace_period_ends_at: task.grace_period_ends_at,
+        flag_id: primaryFlag?.id,
+      };
+    });
 
     return NextResponse.json({ tasks: transformedTasks });
   } catch (error) {

@@ -19,10 +19,17 @@ export async function GET(request: NextRequest) {
 
     if (error) throw error;
 
-    return NextResponse.json({ integrations: integrations || [] });
+    return NextResponse.json({ 
+      success: true,
+      integrations: integrations || [],
+      user_id: userResult.userId,
+    });
   } catch (error) {
     console.error('Get integrations error:', error);
-    return NextResponse.json({ error: 'Failed to fetch integrations' }, { status: 500 });
+    return NextResponse.json({ 
+      error: error instanceof Error ? error.message : 'Failed to fetch integrations',
+      success: false 
+    }, { status: 500 });
   }
 }
 

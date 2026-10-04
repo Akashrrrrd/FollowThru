@@ -4,11 +4,11 @@ import {
   createContext,
   useContext,
   useEffect,
+  useRef,
   useState,
   useCallback,
   type ReactNode,
 } from 'react';
-import { useRouter } from 'next/navigation';
 import type { Session, User } from '@supabase/supabase-js';
 import { supabase } from '@/lib/supabase-client';
 
@@ -39,73 +39,85 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [organization, setOrganization] = useState<OrganizationInfo | null>(null);
   const [loading, setLoading] = useState(true);
 
-  // Load organization context when user changes
-  const loadOrganization = useCallback(async (userId: string) => {
-    try {
-      // Get the session token to pass to the API
-      const { data: { session } } = await supabase.auth.getSession();
-      if (!session?.access_token) {
-        console.warn('[auth-provider] No access token available for organization load');
-        setOrganization(null);
-        return;
-      }
+  // Tracks which user's organization has been loaded, to avoid duplicate requests
+  // (getSession + INITIAL_SESSION + SIGNED_IN can all fire for the same user).
+  const loadedOrgForUser = useRef<string | null>(null);
 
+  /**
+   * Loads the organization using the access token we already have.
+   * IMPORTANT: do NOT call supabase.auth.* methods in here — this runs from inside
+   * onAuthStateChange, and calling auth methods there can deadlock the auth lock.
+   */
+  const loadOrganization = useCallback(async (userId: string, accessToken: string) => {
+    if (loadedOrgForUser.current === userId) return;
+    loadedOrgForUser.current = userId;
+
+    try {
       const response = await fetch('/api/organizations/current', {
         headers: {
-          'Authorization': `Bearer ${session.access_token}`,
+          Authorization: `Bearer ${accessToken}`,
           'Content-Type': 'application/json',
         },
       });
 
       if (response.ok) {
-        const data = await response.json();
-        setOrganization(data);
+        setOrganization(await response.json());
       } else {
-        // Organization initialization failed
         const errorData = await response.json().catch(() => ({}));
         const errorMsg = errorData.error || errorData.reason || 'Failed to load organization';
         console.error(`[auth-provider] Failed to load organization (${response.status}): ${errorMsg}`);
-        // Log but don't crash - let pages handle missing org context
+        loadedOrgForUser.current = null; // allow retry
         setOrganization(null);
-        // TODO: Consider showing a toast or banner alerting user to the initialization failure
       }
     } catch (err) {
       console.error('[auth-provider] Failed to load organization context (network error):', err);
+      loadedOrgForUser.current = null; // allow retry
       setOrganization(null);
-      // TODO: Consider showing a toast or banner alerting user to the network error
     }
   }, []);
 
   useEffect(() => {
-    supabase.auth.getSession().then(({ data }) => {
+    let cancelled = false;
+
+    supabase.auth.getSession().then(async ({ data }) => {
+      if (cancelled) return;
       setSession(data.session);
       setUser(data.session?.user ?? null);
-      if (data.session?.user?.id) {
-        loadOrganization(data.session.user.id);
+      if (data.session?.user?.id && data.session.access_token) {
+        await loadOrganization(data.session.user.id, data.session.access_token);
       }
-      setLoading(false);
+      if (!cancelled) setLoading(false);
     });
 
     const {
       data: { subscription },
-    } = supabase.auth.onAuthStateChange((_event, session) => {
-      (async () => {
-        setSession(session);
-        setUser(session?.user ?? null);
-        if (session?.user?.id) {
-          await loadOrganization(session.user.id);
+    } = supabase.auth.onAuthStateChange((event, nextSession) => {
+      // Not awaited on purpose: keep the callback synchronous to avoid auth-lock deadlocks.
+      void (async () => {
+        setSession(nextSession);
+        setUser(nextSession?.user ?? null);
+
+        if (nextSession?.user?.id && nextSession.access_token) {
+          if (event !== 'TOKEN_REFRESHED') {
+            await loadOrganization(nextSession.user.id, nextSession.access_token);
+          }
         } else {
+          loadedOrgForUser.current = null;
           setOrganization(null);
         }
         setLoading(false);
       })();
     });
 
-    return () => subscription.unsubscribe();
+    return () => {
+      cancelled = true;
+      subscription.unsubscribe();
+    };
   }, [loadOrganization]);
 
   const signOut = useCallback(async () => {
     await supabase.auth.signOut();
+    loadedOrgForUser.current = null;
     setSession(null);
     setUser(null);
     setOrganization(null);

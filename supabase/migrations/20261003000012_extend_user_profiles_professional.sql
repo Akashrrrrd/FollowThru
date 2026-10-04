@@ -8,15 +8,15 @@ ALTER TABLE user_profiles ADD COLUMN IF NOT EXISTS company varchar(255);
 ALTER TABLE user_profiles ADD COLUMN IF NOT EXISTS bio text;
 ALTER TABLE user_profiles ADD COLUMN IF NOT EXISTS location varchar(255);
 
--- Add comments for clarity
 COMMENT ON COLUMN user_profiles.phone IS 'User phone number for contact purposes';
 COMMENT ON COLUMN user_profiles.email IS 'User email address (optional, can differ from auth email)';
 COMMENT ON COLUMN user_profiles.company IS 'Company name where user works';
 COMMENT ON COLUMN user_profiles.bio IS 'User biography or professional summary';
 COMMENT ON COLUMN user_profiles.location IS 'User location or office location';
 
--- Create index on company for team/org filtering
 CREATE INDEX IF NOT EXISTS idx_user_profiles_company ON user_profiles(company);
-
--- Create index on location for location-based features
 CREATE INDEX IF NOT EXISTS idx_user_profiles_location ON user_profiles(location);
+
+-- IMPORTANT: make PostgREST (Supabase API) pick up the new columns immediately.
+-- Without this you can get: "Could not find the 'phone' column of 'user_profiles' in the schema cache"
+NOTIFY pgrst, 'reload schema';

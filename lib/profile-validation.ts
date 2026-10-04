@@ -1,8 +1,3 @@
-/**
- * Shared profile input validation/sanitization (server-side).
- * Limits mirror the user_profiles column sizes.
- */
-
 export const PROFILE_LIMITS = {
   full_name: 100,
   display_name: 50,
@@ -27,10 +22,6 @@ export type SanitizeResult =
   | { ok: true; values: ProfileValues }
   | { ok: false; error: string };
 
-/**
- * @param input   raw object (request body or signup metadata)
- * @param partial true for PATCH (only validate provided fields), false for POST
- */
 export function sanitizeProfileInput(input: unknown, partial: boolean): SanitizeResult {
   if (!input || typeof input !== 'object') {
     return { ok: false, error: 'Invalid request body.' };
@@ -56,7 +47,6 @@ export function sanitizeProfileInput(input: unknown, partial: boolean): Sanitize
     values[field] = trimmed === '' ? null : trimmed;
   }
 
-  // full_name
   if (!partial || 'full_name' in values) {
     if (!values.full_name) return { ok: false, error: 'Full name is required.' };
     if (values.full_name.length < 2) {
@@ -64,12 +54,11 @@ export function sanitizeProfileInput(input: unknown, partial: boolean): Sanitize
     }
   }
 
-  // display_name: blank -> first name of full_name
   if ('display_name' in values && !values.display_name) {
     if (values.full_name) {
       values.display_name = values.full_name.split(/\s+/)[0];
     } else {
-      delete values.display_name; // can't derive; leave existing value untouched
+      delete values.display_name;
     }
   }
   if (!partial && !values.display_name) {

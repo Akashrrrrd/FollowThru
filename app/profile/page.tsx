@@ -17,6 +17,9 @@ import {
   Edit2,
   Save,
   X,
+  Building2,
+  MapPin,
+  Phone,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
@@ -30,8 +33,10 @@ import { ProtectedRoute } from '@/components/protected-route';
 import { useAuthFetch } from '@/hooks/use-auth-fetch';
 import { useAuth } from '@/components/auth-provider';
 import { useCurrentUser } from '@/lib/current-user-context';
+import type { UserProfile } from '@/lib/types';
 
 interface ProfileData {
+  profile: UserProfile | null;
   user: {
     email: string;
     id: string;
@@ -64,6 +69,30 @@ interface ProfileData {
   }>;
 }
 
+interface ProfileFormData {
+  full_name: string;
+  display_name: string;
+  job_title: string;
+  avatar_url: string;
+  phone: string;
+  email: string;
+  company: string;
+  bio: string;
+  location: string;
+}
+
+const EMPTY_FORM: ProfileFormData = {
+  full_name: '',
+  display_name: '',
+  job_title: '',
+  avatar_url: '',
+  phone: '',
+  email: '',
+  company: '',
+  bio: '',
+  location: '',
+};
+
 function formatDate(dateStr: string): string {
   const date = new Date(dateStr);
   if (isNaN(date.getTime())) return dateStr;
@@ -74,9 +103,28 @@ function formatDate(dateStr: string): string {
   });
 }
 
-function getInitials(email: string): string {
-  const username = email.split('@')[0];
-  return username.slice(0, 2).toUpperCase();
+/**
+ * Build the edit-form values. The profile row returned by /api/profile is the source of
+ * truth (its `email` is the optional CONTACT email). currentUser is only a fallback for
+ * name fields — its `email` is the auth email and must not be copied into the contact email.
+ */
+function toFormData(
+  profile: UserProfile | null | undefined,
+  fallback: Partial<UserProfile> | null | undefined,
+): ProfileFormData {
+  const p = profile ?? null;
+  const f = fallback ?? null;
+  return {
+    full_name: p?.full_name ?? f?.full_name ?? '',
+    display_name: p?.display_name ?? f?.display_name ?? '',
+    job_title: p?.job_title ?? f?.job_title ?? '',
+    avatar_url: p?.avatar_url ?? f?.avatar_url ?? '',
+    phone: p?.phone ?? '',
+    email: p?.email ?? '',
+    company: p?.company ?? '',
+    bio: p?.bio ?? '',
+    location: p?.location ?? '',
+  };
 }
 
 function ProfileContent() {
@@ -90,19 +138,7 @@ function ProfileContent() {
   const [isEditing, setIsEditing] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
-
-  // Form state for editing
-  const [formData, setFormData] = useState({
-    full_name: '',
-    display_name: '',
-    job_title: '',
-    avatar_url: '',
-    phone: '',
-    email: '',
-    company: '',
-    bio: '',
-    location: '',
-  });
+  const [formData, setFormData] = useState<ProfileFormData>(EMPTY_FORM);
 
   useEffect(() => {
     authFetch('/api/profile')
@@ -122,22 +158,11 @@ function ProfileContent() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Populate form when currentUser is loaded
+  // Keep the form in sync when data loads (but never clobber edits in progress)
   useEffect(() => {
-    if (currentUser) {
-      setFormData({
-        full_name: currentUser.full_name || '',
-        display_name: currentUser.display_name || '',
-        job_title: currentUser.job_title || '',
-        avatar_url: currentUser.avatar_url || '',
-        phone: currentUser.phone || '',
-        email: currentUser.email || '',
-        company: currentUser.company || '',
-        bio: currentUser.bio || '',
-        location: currentUser.location || '',
-      });
-    }
-  }, [currentUser]);
+    if (isEditing) return;
+    setFormData(toFormData(data?.profile, currentUser));
+  }, [data?.profile, currentUser, isEditing]);
 
   const handleSignOut = async () => {
     await signOut();
@@ -145,34 +170,37 @@ function ProfileContent() {
   };
 
   const handleEditClick = () => {
-    setIsEditing(true);
+    setFormData(toFormData(data?.profile, currentUser));
     setSaveError(null);
+    setIsEditing(true);
   };
 
   const handleCancel = () => {
     setIsEditing(false);
     setSaveError(null);
-    // Reset form to current values
-    if (currentUser) {
-      setFormData({
-        full_name: currentUser.full_name || '',
-        display_name: currentUser.display_name || '',
-        job_title: currentUser.job_title || '',
-        avatar_url: currentUser.avatar_url || '',
-        phone: currentUser.phone || '',
-        email: currentUser.email || '',
-        company: currentUser.company || '',
-        bio: currentUser.bio || '',
-        location: currentUser.location || '',
-      });
-    }
+    setFormData(toFormData(data?.profile, currentUser));
   };
+
+  const setField = (field: keyof ProfileFormData, value: string) =>
+    setFormData((prev) => ({ ...prev, [field]: value }));
 
   const handleSaveProfile = async () => {
     setSaveError(null);
 
     if (!formData.full_name.trim()) {
       setSaveError('Full name is required.');
+      return;
+    }
+    if (formData.phone.trim() && !/^[0-9\s\-+()]+$/.test(formData.phone.trim())) {
+      setSaveError('Please enter a valid phone number.');
+      return;
+    }
+    if (formData.phone.trim().length > 20) {
+      setSaveError('Phone number must be at most 20 characters.');
+      return;
+    }
+    if (formData.email.trim() && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(formData.email.trim())) {
+      setSaveError('Please enter a valid contact email address.');
       return;
     }
 
@@ -194,12 +222,17 @@ function ProfileContent() {
         }),
       });
 
+      const result = await res.json().catch(() => ({}));
       if (!res.ok) {
-        const errorData = await res.json();
-        throw new Error(errorData.error || 'Failed to save profile');
+        throw new Error(result.error || 'Failed to save profile');
       }
 
-      // Refresh user context to update everywhere
+      // Update local profile so the form/display reflect the saved values immediately
+      if (result.profile) {
+        setData((prev) => (prev ? { ...prev, profile: result.profile } : prev));
+      }
+
+      // Refresh user context so the name/avatar update everywhere
       await refreshUser();
       setIsEditing(false);
     } catch (err) {
@@ -213,54 +246,78 @@ function ProfileContent() {
   if (error) return <PageError message={error} />;
   if (!data) return <PageError message="No profile data available." />;
 
-  const { stats, recentMeetings, upcomingTasks } = data;
+  const { stats, recentMeetings, upcomingTasks, profile } = data;
+
+  // Prefer the freshly-fetched profile for display; fall back to context
+  const shownName = profile?.full_name || currentUser?.full_name || user?.email?.split('@')[0] || 'User';
+  const shownDisplayName = profile?.display_name || currentUser?.display_name;
+  const shownJobTitle = profile?.job_title || currentUser?.job_title;
+  const shownAvatar = profile?.avatar_url || currentUser?.avatar_url;
 
   return (
     <div className="mx-auto max-w-6xl px-4 py-8">
       {/* Profile Header - Editable */}
       <div className="mb-8 rounded-lg border border-gray-200 bg-white p-6 shadow-sm">
         {!isEditing ? (
-          // Display Mode
           <div className="flex flex-col gap-6 sm:flex-row sm:items-center">
             <Avatar className="h-20 w-20 border-2 border-blue-100">
-              {currentUser?.avatar_url && (
-                <AvatarImage src={currentUser.avatar_url} alt={currentUser?.display_name || 'User'} />
-              )}
+              {shownAvatar && <AvatarImage src={shownAvatar} alt={shownDisplayName || 'User'} />}
               <AvatarFallback className="bg-blue-600 text-xl font-semibold text-white">
-                {currentUser?.display_name
-                  ? currentUser.display_name.slice(0, 2).toUpperCase()
+                {shownDisplayName
+                  ? shownDisplayName.slice(0, 2).toUpperCase()
                   : user?.email
                   ? user.email.slice(0, 2).toUpperCase()
                   : 'U'}
               </AvatarFallback>
             </Avatar>
             <div className="flex-1">
-              <h1 className="text-2xl font-bold text-gray-900">
-                {currentUser?.full_name || user?.email?.split('@')[0] || 'User'}
-              </h1>
-              {currentUser?.display_name && (
-                <div className="text-sm text-gray-500">Display name: {currentUser.display_name}</div>
+              <h1 className="text-2xl font-bold text-gray-900">{shownName}</h1>
+              {shownDisplayName && (
+                <div className="text-sm text-gray-500">Display name: {shownDisplayName}</div>
               )}
-              {currentUser?.job_title && (
-                <div className="text-sm text-gray-600 font-medium">{currentUser.job_title}</div>
+              {shownJobTitle && (
+                <div className="text-sm font-medium text-gray-600">{shownJobTitle}</div>
               )}
               <div className="mt-2 flex flex-col gap-2 text-sm text-gray-500">
                 <div className="flex items-center gap-2">
                   <Mail className="h-4 w-4" />
                   {user?.email}
                 </div>
+                {profile?.email && (
+                  <div className="flex items-center gap-2">
+                    <Mail className="h-4 w-4" />
+                    {profile.email} <span className="text-xs">(contact)</span>
+                  </div>
+                )}
+                {profile?.phone && (
+                  <div className="flex items-center gap-2">
+                    <Phone className="h-4 w-4" />
+                    {profile.phone}
+                  </div>
+                )}
+                {profile?.company && (
+                  <div className="flex items-center gap-2">
+                    <Building2 className="h-4 w-4" />
+                    {profile.company}
+                  </div>
+                )}
+                {profile?.location && (
+                  <div className="flex items-center gap-2">
+                    <MapPin className="h-4 w-4" />
+                    {profile.location}
+                  </div>
+                )}
                 <div className="flex items-center gap-2">
                   <Calendar className="h-4 w-4" />
                   Member since {formatDate(data.user.created_at)}
                 </div>
               </div>
+              {profile?.bio && (
+                <p className="mt-3 whitespace-pre-line text-sm text-gray-600">{profile.bio}</p>
+              )}
             </div>
             <div className="flex flex-col gap-2 sm:flex-row">
-              <Button
-                variant="outline"
-                onClick={handleEditClick}
-                className="gap-2"
-              >
+              <Button variant="outline" onClick={handleEditClick} className="gap-2">
                 <Edit2 className="h-4 w-4" />
                 Edit Profile
               </Button>
@@ -275,16 +332,10 @@ function ProfileContent() {
             </div>
           </div>
         ) : (
-          // Edit Mode
           <div className="space-y-4">
             <div className="flex items-center justify-between">
               <h2 className="text-lg font-semibold text-gray-900">Edit Profile</h2>
-              <Button
-                variant="ghost"
-                size="sm"
-                onClick={handleCancel}
-                disabled={isSaving}
-              >
+              <Button variant="ghost" size="sm" onClick={handleCancel} disabled={isSaving}>
                 <X className="h-4 w-4" />
               </Button>
             </div>
@@ -299,7 +350,7 @@ function ProfileContent() {
                   type="text"
                   placeholder="Your full name"
                   value={formData.full_name}
-                  onChange={(e) => setFormData({ ...formData, full_name: e.target.value })}
+                  onChange={(e) => setField('full_name', e.target.value)}
                   disabled={isSaving}
                   className="border-gray-300"
                 />
@@ -314,13 +365,11 @@ function ProfileContent() {
                   type="text"
                   placeholder="e.g., Akash, Alex, etc."
                   value={formData.display_name}
-                  onChange={(e) => setFormData({ ...formData, display_name: e.target.value })}
+                  onChange={(e) => setField('display_name', e.target.value)}
                   disabled={isSaving}
                   className="border-gray-300"
                 />
-                <p className="text-xs text-gray-500">
-                  Leave blank to auto-generate from first name
-                </p>
+                <p className="text-xs text-gray-500">Leave blank to auto-generate from first name</p>
               </div>
 
               <div className="space-y-2">
@@ -332,7 +381,7 @@ function ProfileContent() {
                   type="text"
                   placeholder="e.g., Product Manager, Engineer, etc."
                   value={formData.job_title}
-                  onChange={(e) => setFormData({ ...formData, job_title: e.target.value })}
+                  onChange={(e) => setField('job_title', e.target.value)}
                   disabled={isSaving}
                   className="border-gray-300"
                 />
@@ -347,102 +396,102 @@ function ProfileContent() {
                   type="url"
                   placeholder="https://example.com/avatar.jpg"
                   value={formData.avatar_url}
-                  onChange={(e) => setFormData({ ...formData, avatar_url: e.target.value })}
+                  onChange={(e) => setField('avatar_url', e.target.value)}
                   disabled={isSaving}
                   className="border-gray-300"
                 />
               </div>
 
-              {/* Professional Information Section */}
               <div className="border-t border-gray-200 pt-4">
                 <h3 className="mb-4 text-sm font-semibold text-gray-900">Professional Information</h3>
-                
-                <div className="space-y-2">
-                  <Label htmlFor="company" className="text-sm font-medium">
-                    Company
-                  </Label>
-                  <Input
-                    id="company"
-                    type="text"
-                    placeholder="Your company name"
-                    value={formData.company}
-                    onChange={(e) => setFormData({ ...formData, company: e.target.value })}
-                    disabled={isSaving}
-                    className="border-gray-300"
-                  />
-                </div>
+                <div className="space-y-4">
+                  <div className="space-y-2">
+                    <Label htmlFor="company" className="text-sm font-medium">
+                      Company
+                    </Label>
+                    <Input
+                      id="company"
+                      type="text"
+                      placeholder="Your company name"
+                      value={formData.company}
+                      onChange={(e) => setField('company', e.target.value)}
+                      disabled={isSaving}
+                      className="border-gray-300"
+                    />
+                  </div>
 
-                <div className="space-y-2">
-                  <Label htmlFor="location" className="text-sm font-medium">
-                    Location
-                  </Label>
-                  <Input
-                    id="location"
-                    type="text"
-                    placeholder="City, Country"
-                    value={formData.location}
-                    onChange={(e) => setFormData({ ...formData, location: e.target.value })}
-                    disabled={isSaving}
-                    className="border-gray-300"
-                  />
-                </div>
+                  <div className="space-y-2">
+                    <Label htmlFor="location" className="text-sm font-medium">
+                      Location
+                    </Label>
+                    <Input
+                      id="location"
+                      type="text"
+                      placeholder="City, Country"
+                      value={formData.location}
+                      onChange={(e) => setField('location', e.target.value)}
+                      disabled={isSaving}
+                      className="border-gray-300"
+                    />
+                  </div>
 
-                <div className="space-y-2">
-                  <Label htmlFor="bio" className="text-sm font-medium">
-                    Bio
-                  </Label>
-                  <textarea
-                    id="bio"
-                    placeholder="Tell us about yourself..."
-                    value={formData.bio}
-                    onChange={(e) => setFormData({ ...formData, bio: e.target.value })}
-                    disabled={isSaving}
-                    rows={3}
-                    className="w-full rounded-md border border-gray-300 px-3 py-2 text-sm placeholder-gray-400 focus:border-blue-500 focus:outline-none"
-                  />
+                  <div className="space-y-2">
+                    <Label htmlFor="bio" className="text-sm font-medium">
+                      Bio
+                    </Label>
+                    <textarea
+                      id="bio"
+                      placeholder="Tell us about yourself..."
+                      value={formData.bio}
+                      onChange={(e) => setField('bio', e.target.value)}
+                      disabled={isSaving}
+                      rows={3}
+                      maxLength={2000}
+                      className="w-full rounded-md border border-gray-300 px-3 py-2 text-sm placeholder-gray-400 focus:border-blue-500 focus:outline-none"
+                    />
+                  </div>
                 </div>
               </div>
 
-              {/* Contact Information Section */}
               <div className="border-t border-gray-200 pt-4">
                 <h3 className="mb-4 text-sm font-semibold text-gray-900">Contact Information</h3>
-                
-                <div className="space-y-2">
-                  <Label htmlFor="email" className="text-sm font-medium">
-                    Email (Optional)
-                  </Label>
-                  <Input
-                    id="email"
-                    type="email"
-                    placeholder="Alternative email address"
-                    value={formData.email}
-                    onChange={(e) => setFormData({ ...formData, email: e.target.value })}
-                    disabled={isSaving}
-                    className="border-gray-300"
-                  />
-                  <p className="text-xs text-gray-500">
-                    Can be different from your account email
-                  </p>
-                </div>
+                <div className="space-y-4">
+                  <div className="space-y-2">
+                    <Label htmlFor="email" className="text-sm font-medium">
+                      Contact Email (Optional)
+                    </Label>
+                    <Input
+                      id="email"
+                      type="email"
+                      placeholder="Alternative email address"
+                      value={formData.email}
+                      onChange={(e) => setField('email', e.target.value)}
+                      disabled={isSaving}
+                      className="border-gray-300"
+                    />
+                    <p className="text-xs text-gray-500">Can be different from your account email</p>
+                  </div>
 
-                <div className="space-y-2">
-                  <Label htmlFor="phone" className="text-sm font-medium">
-                    Phone Number (Optional)
-                  </Label>
-                  <Input
-                    id="phone"
-                    type="tel"
-                    placeholder="+1 (555) 123-4567"
-                    value={formData.phone}
-                    onChange={(e) => setFormData({ ...formData, phone: e.target.value })}
-                    disabled={isSaving}
-                    className="border-gray-300"
-                  />
+                  <div className="space-y-2">
+                    <Label htmlFor="phone" className="text-sm font-medium">
+                      Phone Number (Optional)
+                    </Label>
+                    <Input
+                      id="phone"
+                      type="tel"
+                      placeholder="+1 (555) 123-4567"
+                      maxLength={20}
+                      value={formData.phone}
+                      onChange={(e) => setField('phone', e.target.value)}
+                      disabled={isSaving}
+                      className="border-gray-300"
+                    />
+                  </div>
                 </div>
               </div>
 
               {saveError && (
-                <div className="rounded-lg bg-red-50 p-3 text-sm text-red-700 border border-red-200">
+                <div className="rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-700">
                   {saveError}
                 </div>
               )}
@@ -456,11 +505,7 @@ function ProfileContent() {
                   <Save className="h-4 w-4" />
                   {isSaving ? 'Saving...' : 'Save Profile'}
                 </Button>
-                <Button
-                  variant="outline"
-                  onClick={handleCancel}
-                  disabled={isSaving}
-                >
+                <Button variant="outline" onClick={handleCancel} disabled={isSaving}>
                   Cancel
                 </Button>
               </div>
@@ -473,69 +518,45 @@ function ProfileContent() {
       <div className="mb-8 grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
         <Card>
           <CardHeader className="flex flex-row items-center justify-between pb-2">
-            <CardTitle className="text-sm font-medium text-gray-500">
-              Total Tasks
-            </CardTitle>
+            <CardTitle className="text-sm font-medium text-gray-500">Total Tasks</CardTitle>
             <Briefcase className="h-4 w-4 text-gray-400" />
           </CardHeader>
           <CardContent>
-            <div className="text-2xl font-bold text-gray-900">
-              {stats.totalTasks}
-            </div>
-            <p className="mt-1 text-xs text-gray-500">
-              Across {stats.totalMeetings} meetings
-            </p>
+            <div className="text-2xl font-bold text-gray-900">{stats.totalTasks}</div>
+            <p className="mt-1 text-xs text-gray-500">Across {stats.totalMeetings} meetings</p>
           </CardContent>
         </Card>
 
         <Card>
           <CardHeader className="flex flex-row items-center justify-between pb-2">
-            <CardTitle className="text-sm font-medium text-gray-500">
-              Completed
-            </CardTitle>
+            <CardTitle className="text-sm font-medium text-gray-500">Completed</CardTitle>
             <CheckCircle2 className="h-4 w-4 text-green-600" />
           </CardHeader>
           <CardContent>
-            <div className="text-2xl font-bold text-green-600">
-              {stats.doneTasks}
-            </div>
-            <p className="mt-1 text-xs text-gray-500">
-              {stats.efficiency}% completion rate
-            </p>
+            <div className="text-2xl font-bold text-green-600">{stats.doneTasks}</div>
+            <p className="mt-1 text-xs text-gray-500">{stats.efficiency}% completion rate</p>
           </CardContent>
         </Card>
 
         <Card>
           <CardHeader className="flex flex-row items-center justify-between pb-2">
-            <CardTitle className="text-sm font-medium text-gray-500">
-              Open Tasks
-            </CardTitle>
+            <CardTitle className="text-sm font-medium text-gray-500">Open Tasks</CardTitle>
             <Clock className="h-4 w-4 text-blue-600" />
           </CardHeader>
           <CardContent>
-            <div className="text-2xl font-bold text-blue-600">
-              {stats.openTasks}
-            </div>
-            <p className="mt-1 text-xs text-gray-500">
-              In progress
-            </p>
+            <div className="text-2xl font-bold text-blue-600">{stats.openTasks}</div>
+            <p className="mt-1 text-xs text-gray-500">In progress</p>
           </CardContent>
         </Card>
 
         <Card>
           <CardHeader className="flex flex-row items-center justify-between pb-2">
-            <CardTitle className="text-sm font-medium text-gray-500">
-              Overdue
-            </CardTitle>
+            <CardTitle className="text-sm font-medium text-gray-500">Overdue</CardTitle>
             <AlertTriangle className="h-4 w-4 text-red-600" />
           </CardHeader>
           <CardContent>
-            <div className="text-2xl font-bold text-red-600">
-              {stats.overdueTasks}
-            </div>
-            <p className="mt-1 text-xs text-gray-500">
-              Needs attention
-            </p>
+            <div className="text-2xl font-bold text-red-600">{stats.overdueTasks}</div>
+            <p className="mt-1 text-xs text-gray-500">Needs attention</p>
           </CardContent>
         </Card>
       </div>
@@ -555,23 +576,17 @@ function ProfileContent() {
                 <span className="text-gray-600">
                   Tasks assigned to me: {stats.myDoneTasks} / {stats.myTasks} completed
                 </span>
-                <span className="font-semibold text-gray-900">
-                  {stats.myEfficiency}%
-                </span>
+                <span className="font-semibold text-gray-900">{stats.myEfficiency}%</span>
               </div>
               <Progress value={stats.myEfficiency} className="h-3" />
             </div>
             <div className="grid grid-cols-3 gap-4 rounded-lg bg-gray-50 p-4">
               <div className="text-center">
-                <div className="text-2xl font-bold text-gray-900">
-                  {stats.myTasks}
-                </div>
+                <div className="text-2xl font-bold text-gray-900">{stats.myTasks}</div>
                 <div className="text-xs text-gray-500">My Tasks</div>
               </div>
               <div className="text-center">
-                <div className="text-2xl font-bold text-green-600">
-                  {stats.myDoneTasks}
-                </div>
+                <div className="text-2xl font-bold text-green-600">{stats.myDoneTasks}</div>
                 <div className="text-xs text-gray-500">Completed</div>
               </div>
               <div className="text-center">
@@ -602,11 +617,7 @@ function ProfileContent() {
                       ? Math.round((meeting.done_tasks / meeting.total_tasks) * 100)
                       : 0;
                   return (
-                    <Link
-                      key={meeting.id}
-                      href={`/meetings/${meeting.id}`}
-                      className="group block"
-                    >
+                    <Link key={meeting.id} href={`/meetings/${meeting.id}`} className="group block">
                       <div className="flex items-center justify-between rounded-lg border border-gray-200 p-3 transition-colors hover:border-blue-200 hover:bg-blue-50">
                         <div className="flex-1">
                           <div className="font-medium text-gray-900 group-hover:text-blue-600">
@@ -618,9 +629,7 @@ function ProfileContent() {
                         </div>
                         <div className="flex items-center gap-3">
                           <div className="text-right">
-                            <div className="text-sm font-medium text-gray-900">
-                              {completion}%
-                            </div>
+                            <div className="text-sm font-medium text-gray-900">{completion}%</div>
                             <div className="text-xs text-gray-500">
                               {meeting.done_tasks}/{meeting.total_tasks}
                             </div>
@@ -654,18 +663,10 @@ function ProfileContent() {
                   );
 
                   return (
-                    <div
-                      key={task.id}
-                      className="rounded-lg border border-gray-200 p-3"
-                    >
+                    <div key={task.id} className="rounded-lg border border-gray-200 p-3">
                       <div className="mb-2 flex items-start justify-between">
-                        <div className="flex-1 text-sm text-gray-900">
-                          {task.description}
-                        </div>
-                        <Badge
-                          variant={isOverdue ? 'destructive' : 'secondary'}
-                          className="ml-2"
-                        >
+                        <div className="flex-1 text-sm text-gray-900">{task.description}</div>
+                        <Badge variant={isOverdue ? 'destructive' : 'secondary'} className="ml-2">
                           {isOverdue
                             ? 'Overdue'
                             : daysUntil === 0

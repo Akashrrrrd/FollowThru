@@ -4,6 +4,7 @@ import { createClient } from '@supabase/supabase-js';
 import { getUserOrganizationContext } from '@/lib/organization-context';
 import { ensureUserInDefaultTeam } from '@/lib/team-migration';
 import { getUserTeamContext } from '@/lib/team-context';
+import { sanitizeProfileInput } from '@/lib/profile-validation';
 
 export const dynamic = 'force-dynamic';
 
@@ -22,7 +23,6 @@ export async function GET(request: Request) {
       await ensureUserInDefaultTeam(supabase, user.userId, orgContext.organizationId).catch(
         (err) => {
           console.warn('Failed to ensure user in default team:', err);
-          // Non-blocking: don't fail profile fetch if team assignment fails
         },
       );
     }
@@ -34,16 +34,18 @@ export async function GET(request: Request) {
       {
         global: { headers: { Authorization: `Bearer ${user.token}` } },
         auth: { persistSession: false },
-      }
+      },
     );
-    
-    const { data: { user: authUser } } = await userClient.auth.getUser();
-    
+
+    const {
+      data: { user: authUser },
+    } = await userClient.auth.getUser();
+
     const userEmail = authUser?.email || 'unknown@example.com';
     const userCreatedAt = authUser?.created_at || new Date().toISOString();
-    
+
     // Get user profile (Phase 3)
-    const { data: profile, error: profileError } = await supabase
+    let { data: profile, error: profileError } = await supabase
       .from('user_profiles')
       .select('*')
       .eq('id', user.userId)
@@ -52,14 +54,40 @@ export async function GET(request: Request) {
     if (profileError) {
       console.error('Profile fetch error:', profileError);
     }
-    
+
+    // FALLBACK: if the profile doesn't exist yet (e.g. the user signed up while email
+    // confirmation was required, so no session existed to call POST /api/profile),
+    // create it from the data collected in the sign-up wizard (stored in user metadata).
+    if (!profile && !profileError) {
+      const signupProfile = authUser?.user_metadata?.signup_profile;
+      if (signupProfile) {
+        const parsed = sanitizeProfileInput(signupProfile, false);
+        if (parsed.ok) {
+          const { data: created, error: createError } = await supabase
+            .from('user_profiles')
+            .upsert({ id: user.userId, ...parsed.values }, { onConflict: 'id' })
+            .select()
+            .single();
+          if (createError) {
+            console.error('Profile auto-create error:', createError);
+          } else {
+            profile = created;
+          }
+        } else {
+          console.warn('Signup profile metadata invalid:', parsed.error);
+        }
+      }
+    }
+
     // Get all tasks for the user
     const { data: allTasks, error: tasksError } = await supabase
       .from('tasks')
-      .select(`
+      .select(
+        `
         *,
         meetings!inner(user_id, title, created_at)
-      `)
+      `,
+      )
       .eq('user_id', user.userId);
 
     if (tasksError) throw tasksError;
@@ -74,60 +102,62 @@ export async function GET(request: Request) {
     if (meetingsError) throw meetingsError;
 
     // Calculate statistics
+    const isDone = (s: string) => s === 'done' || s === 'completed';
     const totalTasks = allTasks?.length || 0;
-    const doneTasks = allTasks?.filter((t) => t.status === 'done' || t.status === 'completed').length || 0;
-    const overdueTasks = allTasks?.filter((t) => {
-      if (t.status === 'done' || t.status === 'completed' || !t.due_date) return false;
-      return new Date(t.due_date) < new Date();
-    }).length || 0;
-    const openTasks = allTasks?.filter((t) => t.status === 'open' || t.status === 'in_progress' || t.status === 'blocked').length || 0;
+    const doneTasks = allTasks?.filter((t) => isDone(t.status)).length || 0;
+    const overdueTasks =
+      allTasks?.filter((t) => {
+        if (isDone(t.status) || !t.due_date) return false;
+        return new Date(t.due_date) < new Date();
+      }).length || 0;
+    const openTasks =
+      allTasks?.filter(
+        (t) => t.status === 'open' || t.status === 'in_progress' || t.status === 'blocked',
+      ).length || 0;
 
-    // Calculate efficiency (completion rate)
     const efficiency = totalTasks > 0 ? Math.round((doneTasks / totalTasks) * 100) : 0;
 
-    // Get tasks assigned to the user (by owner_user_id)
-    const myTasks = allTasks?.filter((t) => 
-      t.owner_user_id === user.userId
-    ) || [];
-
-    const myDoneTasks = myTasks.filter((t) => t.status === 'done' || t.status === 'completed').length;
+    const myTasks = allTasks?.filter((t) => t.owner_user_id === user.userId) || [];
+    const myDoneTasks = myTasks.filter((t) => isDone(t.status)).length;
     const myEfficiency = myTasks.length > 0 ? Math.round((myDoneTasks / myTasks.length) * 100) : 0;
 
-    // Get recent meetings (last 5)
-    const recentMeetings = meetings?.slice(0, 5).map((m) => {
-      const meetingTasks = allTasks?.filter((t) => t.meeting_id === m.id) || [];
-      const done = meetingTasks.filter((t) => t.status === 'done' || t.status === 'completed').length;
-      return {
-        id: m.id,
-        title: m.title,
-        created_at: m.created_at,
-        total_tasks: meetingTasks.length,
-        done_tasks: done,
-      };
-    }) || [];
+    const recentMeetings =
+      meetings?.slice(0, 5).map((m) => {
+        const meetingTasks = allTasks?.filter((t) => t.meeting_id === m.id) || [];
+        const done = meetingTasks.filter((t) => isDone(t.status)).length;
+        return {
+          id: m.id,
+          title: m.title,
+          created_at: m.created_at,
+          total_tasks: meetingTasks.length,
+          done_tasks: done,
+        };
+      }) || [];
 
-    // Get upcoming tasks (open tasks with due dates)
-    const upcomingTasks = allTasks
-      ?.filter((t) => t.status === 'open' && t.due_date)
-      .sort((a, b) => new Date(a.due_date!).getTime() - new Date(b.due_date!).getTime())
-      .slice(0, 5)
-      .map((t) => ({
-        id: t.id,
-        description: t.description,
-        owner: t.owner,
-        due_date: t.due_date,
-        meeting_id: t.meeting_id,
-      })) || [];
+    const upcomingTasks =
+      allTasks
+        ?.filter((t) => t.status === 'open' && t.due_date)
+        .sort((a, b) => new Date(a.due_date!).getTime() - new Date(b.due_date!).getTime())
+        .slice(0, 5)
+        .map((t) => ({
+          id: t.id,
+          description: t.description,
+          owner: t.owner,
+          due_date: t.due_date,
+          meeting_id: t.meeting_id,
+        })) || [];
 
     // Phase 2: Get team context for user
     let teamContext = null;
     if (orgContext) {
-      teamContext = await getUserTeamContext(supabase, user.userId, orgContext.organizationId).catch(
-        (err) => {
-          console.warn('Failed to get team context:', err);
-          return null;
-        },
-      );
+      teamContext = await getUserTeamContext(
+        supabase,
+        user.userId,
+        orgContext.organizationId,
+      ).catch((err) => {
+        console.warn('Failed to get team context:', err);
+        return null;
+      });
     }
 
     return NextResponse.json({
@@ -137,10 +167,12 @@ export async function GET(request: Request) {
         id: user.userId,
         created_at: userCreatedAt,
       },
-      organization: orgContext ? {
-        id: orgContext.organizationId,
-        role: orgContext.role,
-      } : null,
+      organization: orgContext
+        ? {
+            id: orgContext.organizationId,
+            role: orgContext.role,
+          }
+        : null,
       teams: teamContext || null,
       stats: {
         totalTasks,
@@ -158,10 +190,7 @@ export async function GET(request: Request) {
     });
   } catch (err) {
     console.error('Profile fetch error:', err);
-    return NextResponse.json(
-      { error: 'Failed to fetch profile data' },
-      { status: 500 },
-    );
+    return NextResponse.json({ error: 'Failed to fetch profile data' }, { status: 500 });
   }
 }
 
@@ -174,64 +203,22 @@ export async function POST(request: NextRequest) {
   const supabase = createServerClient();
 
   try {
-    const body = await request.json();
-    const { 
-      full_name, 
-      display_name, 
-      job_title, 
-      avatar_url,
-      // New professional fields
-      phone,
-      email,
-      company,
-      bio,
-      location,
-    } = body as {
-      full_name?: string;
-      display_name?: string;
-      job_title?: string | null;
-      avatar_url?: string | null;
-      phone?: string | null;
-      email?: string | null;
-      company?: string | null;
-      bio?: string | null;
-      location?: string | null;
-    };
-
-    if (!full_name || !full_name.trim()) {
-      return NextResponse.json(
-        { error: 'Full name is required.' },
-        { status: 400 },
-      );
+    const body = await request.json().catch(() => null);
+    const parsed = sanitizeProfileInput(body, false);
+    if (!parsed.ok) {
+      return NextResponse.json({ error: parsed.error }, { status: 400 });
     }
 
-    const displayName = display_name?.trim() || full_name.trim().split(' ')[0];
-
-    // Upsert user profile (insert or update)
     const { data: profile, error } = await supabase
       .from('user_profiles')
-      .upsert(
-        {
-          id: user.userId,
-          full_name: full_name.trim(),
-          display_name: displayName,
-          job_title: job_title || null,
-          avatar_url: avatar_url || null,
-          phone: phone || null,
-          email: email || null,
-          company: company || null,
-          bio: bio || null,
-          location: location || null,
-        },
-        { onConflict: 'id' }
-      )
+      .upsert({ id: user.userId, ...parsed.values }, { onConflict: 'id' })
       .select()
       .single();
 
     if (error) {
       console.error('Profile upsert error:', error);
       return NextResponse.json(
-        { error: 'Failed to save profile.' },
+        { error: `Failed to save profile. ${error.message}` },
         { status: 500 },
       );
     }
@@ -239,10 +226,7 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ profile });
   } catch (err) {
     console.error('Profile POST error:', err);
-    return NextResponse.json(
-      { error: 'An unexpected error occurred.' },
-      { status: 500 },
-    );
+    return NextResponse.json({ error: 'An unexpected error occurred.' }, { status: 500 });
   }
 }
 
@@ -255,70 +239,57 @@ export async function PATCH(request: NextRequest) {
   const supabase = createServerClient();
 
   try {
-    const body = await request.json();
-    const { 
-      full_name, 
-      display_name, 
-      job_title, 
-      avatar_url,
-      // New professional fields
-      phone,
-      email,
-      company,
-      bio,
-      location,
-    } = body as {
-      full_name?: string;
-      display_name?: string;
-      job_title?: string | null;
-      avatar_url?: string | null;
-      phone?: string | null;
-      email?: string | null;
-      company?: string | null;
-      bio?: string | null;
-      location?: string | null;
-    };
-
-    // Build updates object (only include provided fields)
-    const updates: Record<string, any> = {};
-    if (full_name !== undefined) updates.full_name = full_name.trim() || '';
-    if (display_name !== undefined) updates.display_name = display_name.trim() || '';
-    if (job_title !== undefined) updates.job_title = job_title || null;
-    if (avatar_url !== undefined) updates.avatar_url = avatar_url || null;
-    if (phone !== undefined) updates.phone = phone || null;
-    if (email !== undefined) updates.email = email || null;
-    if (company !== undefined) updates.company = company || null;
-    if (bio !== undefined) updates.bio = bio || null;
-    if (location !== undefined) updates.location = location || null;
-
-    if (Object.keys(updates).length === 0) {
-      return NextResponse.json(
-        { error: 'No fields to update.' },
-        { status: 400 },
-      );
+    const body = await request.json().catch(() => null);
+    const parsed = sanitizeProfileInput(body, true);
+    if (!parsed.ok) {
+      return NextResponse.json({ error: parsed.error }, { status: 400 });
     }
 
-    const { data: profile, error } = await supabase
+    const updates = parsed.values;
+    if (Object.keys(updates).length === 0) {
+      return NextResponse.json({ error: 'No fields to update.' }, { status: 400 });
+    }
+
+    const { data: updated, error } = await supabase
       .from('user_profiles')
       .update(updates)
       .eq('id', user.userId)
       .select()
-      .single();
+      .maybeSingle();
 
     if (error) {
       console.error('Profile update error:', error);
       return NextResponse.json(
-        { error: 'Failed to update profile.' },
+        { error: `Failed to update profile. ${error.message}` },
         { status: 500 },
       );
     }
 
-    return NextResponse.json({ profile });
+    if (updated) {
+      return NextResponse.json({ profile: updated });
+    }
+
+    // No profile row yet: create one (requires full_name)
+    const full = sanitizeProfileInput(updates, false);
+    if (!full.ok) {
+      return NextResponse.json({ error: full.error }, { status: 400 });
+    }
+    const { data: created, error: createError } = await supabase
+      .from('user_profiles')
+      .upsert({ id: user.userId, ...full.values }, { onConflict: 'id' })
+      .select()
+      .single();
+
+    if (createError) {
+      console.error('Profile create-on-patch error:', createError);
+      return NextResponse.json(
+        { error: `Failed to save profile. ${createError.message}` },
+        { status: 500 },
+      );
+    }
+    return NextResponse.json({ profile: created });
   } catch (err) {
     console.error('Profile PATCH error:', err);
-    return NextResponse.json(
-      { error: 'An unexpected error occurred.' },
-      { status: 500 },
-    );
+    return NextResponse.json({ error: 'An unexpected error occurred.' }, { status: 500 });
   }
 }

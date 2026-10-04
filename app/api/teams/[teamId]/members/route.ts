@@ -355,7 +355,7 @@ export async function POST(
         {
           invitation: invitationSummary,
           warning:
-            'Invitation created but the email could not be delivered. Check the email configuration (RESEND_API_KEY / EMAIL_FROM).',
+            'Invitation created but the email could not be delivered. Please try again or contact an administrator.',
         },
         { status: 201 },
       );

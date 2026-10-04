@@ -1,18 +1,18 @@
 /**
  * Email Provider Abstraction
  *
- * Supports multiple email providers with a unified interface:
- * - Resend (recommended, simple API)
- * - Console (development, logs to stdout)
+ * Delivery is done through Gmail SMTP (Nodemailer):
+ *   host smtp.gmail.com, port 465, implicit TLS.
+ *   Credentials come only from environment variables:
+ *     GMAIL_USER          e.g. followthruai@gmail.com
+ *     GMAIL_APP_PASSWORD  Google app password (never commit this)
  *
- * Fixes vs. previous version:
- *  - `interface EmailProvider` and `class EmailProvider` shared a name
- *    (duplicate identifier). The interface is now `IEmailProvider`.
- *  - send() returned `false` on failure, so callers' try/catch never ran and
- *    failed deliveries were reported as "Invitation sent". It now throws.
- *  - Plain-text body is now sent to Resend.
- *  - Sender address is configurable via EMAIL_FROM.
+ * Server-side only: import this module from API routes / server code,
+ * never from a client component.
  */
+
+import nodemailer from 'nodemailer';
+import type { Transporter } from 'nodemailer';
 
 export interface EmailOptions {
   to: string;
@@ -47,13 +47,19 @@ class ConsoleEmailProvider implements IEmailProvider {
   }
 }
 
-class ResendEmailProvider implements IEmailProvider {
-  private apiKey: string;
+class GmailEmailProvider implements IEmailProvider {
+  private transporter: Transporter;
   private from: string;
 
-  constructor(apiKey: string, from: string) {
-    this.apiKey = apiKey;
-    this.from = from;
+  constructor(user: string, appPassword: string) {
+    this.transporter = nodemailer.createTransport({
+      host: 'smtp.gmail.com',
+      port: 465,
+      secure: true,
+      auth: { user, pass: appPassword },
+    });
+    // Gmail only allows the authenticated account as the sender address.
+    this.from = `FollowThru <${user}>`;
   }
 
   async send(options: EmailOptions): Promise<void>;
@@ -61,39 +67,52 @@ class ResendEmailProvider implements IEmailProvider {
   async send(toOrOptions: string | EmailOptions, subject?: string, body?: string): Promise<void> {
     const { to, subject: subj, html, text } = normalizeArgs(toOrOptions, subject, body);
 
-    const response = await fetch('https://api.resend.com/emails', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        Authorization: `Bearer ${this.apiKey}`,
-      },
-      body: JSON.stringify({
+    try {
+      await this.transporter.sendMail({
         from: this.from,
         to,
         subject: subj,
         html,
         ...(text ? { text } : {}),
-      }),
-    });
-
-    if (!response.ok) {
-      const detail = await response.text().catch(() => response.statusText);
-      throw new Error(`Resend API error (${response.status}): ${detail}`);
+      });
+    } catch (err) {
+      const e = err as {
+        code?: string;
+        command?: string;
+        responseCode?: number;
+        response?: string;
+        message?: string;
+      };
+      // Diagnostics only: never log credentials or the message body.
+      console.error('[EMAIL] Gmail SMTP send failed:', {
+        to,
+        code: e.code,
+        command: e.command,
+        responseCode: e.responseCode,
+        response: e.response,
+        message: e.message,
+      });
+      // Generic message so SMTP details never reach the browser.
+      throw new Error('Email delivery failed');
     }
   }
 }
 
 export function getEmailProvider(): IEmailProvider {
-  const apiKey = process.env.RESEND_API_KEY;
-  // The "from" domain must be verified in Resend. For testing you can use
-  // 'FollowThru <onboarding@resend.dev>' (only delivers to your own address).
-  const from = process.env.EMAIL_FROM || 'FollowThru <noreply@followthru.app>';
+  const user = process.env.GMAIL_USER;
+  const appPassword = process.env.GMAIL_APP_PASSWORD?.replace(/\s+/g, '');
 
-  if (apiKey) {
-    return new ResendEmailProvider(apiKey, from);
+  if (user && appPassword) {
+    return new GmailEmailProvider(user, appPassword);
   }
 
-  console.warn('[EMAIL] RESEND_API_KEY not set. Using console provider.');
+  // In production a missing config must fail loudly. A silent console
+  // fallback would report "invitation sent" while nothing is delivered.
+  if (process.env.NODE_ENV === 'production') {
+    throw new Error('Email is not configured: set GMAIL_USER and GMAIL_APP_PASSWORD');
+  }
+
+  console.warn('[EMAIL] GMAIL_USER / GMAIL_APP_PASSWORD not set. Using console provider.');
   return new ConsoleEmailProvider();
 }
 

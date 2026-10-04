@@ -36,7 +36,30 @@ export async function GET(request: NextRequest) {
       );
     }
 
-    // Get all teams in the organization with their members
+    // Query team_members to find teams where the current user is a member
+    const { data: userMemberships, error: membershipError } = await supabase
+      .from('team_members')
+      .select('team_id')
+      .eq('user_id', user.userId);
+
+    if (membershipError) {
+      console.error('Failed to fetch user team memberships:', membershipError);
+      return NextResponse.json(
+        { error: 'Failed to fetch team memberships' },
+        { status: 500 }
+      );
+    }
+
+    // If user has no team memberships, return empty array
+    const userTeamIds = (userMemberships ?? []).map(m => m.team_id);
+    
+    if (userTeamIds.length === 0) {
+      return NextResponse.json({
+        teams: [],
+      });
+    }
+
+    // Get teams where the user is a member
     const { data: teams, error } = await supabase
       .from('teams')
       .select(`
@@ -53,6 +76,7 @@ export async function GET(request: NextRequest) {
         )
       `)
       .eq('organization_id', orgContext.organizationId)
+      .in('id', userTeamIds)
       .order('name', { ascending: true });
 
     if (error) {

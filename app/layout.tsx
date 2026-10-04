@@ -1,5 +1,6 @@
 import './globals.css';
 import type { Metadata } from 'next';
+import { SpeedInsights } from '@vercel/speed-insights/next';
 import { AuthProvider } from '@/components/auth-provider';
 import { ProfileCheck } from '@/components/profile-check';
 import { CurrentUserProvider } from '@/lib/current-user-context';
@@ -34,6 +35,7 @@ export default function RootLayout({
             </ProfileCheck>
           </CurrentUserProvider>
         </AuthProvider>
+        <SpeedInsights />
       </body>
     </html>
   );

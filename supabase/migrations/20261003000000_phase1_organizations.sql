@@ -142,7 +142,8 @@ LEFT JOIN public.user_profiles up ON up.id = u.id
 WHERE NOT EXISTS (
   SELECT 1 FROM public.organization_members om
   WHERE om.user_id = u.id
-);
+)
+ON CONFLICT DO NOTHING;
 
 -- Create membership records for each user in their personal org
 -- (Idempotent: only inserts unique org+user combinations)
@@ -155,17 +156,17 @@ SELECT
   CURRENT_TIMESTAMP
 FROM auth.users u
 CROSS JOIN public.organizations o
+LEFT JOIN public.user_profiles up ON up.id = u.id
 WHERE NOT EXISTS (
   SELECT 1 FROM public.organization_members om
   WHERE om.user_id = u.id
   AND om.organization_id = o.id
 )
--- Match org to user by name similarity (best effort for existing data)
 AND (
   o.name LIKE '%' || COALESCE(up.display_name, u.email) || '%'
   OR o.name LIKE '%' || u.id::text || '%'
 )
-LEFT JOIN public.user_profiles up ON up.id = u.id;
+ON CONFLICT DO NOTHING;
 
 -- Backfill organization_id in meetings
 -- For each meeting, assign to the org of the meeting creator

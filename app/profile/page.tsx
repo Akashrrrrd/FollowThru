@@ -97,6 +97,11 @@ function ProfileContent() {
     display_name: '',
     job_title: '',
     avatar_url: '',
+    phone: '',
+    email: '',
+    company: '',
+    bio: '',
+    location: '',
   });
 
   useEffect(() => {
@@ -125,6 +130,11 @@ function ProfileContent() {
         display_name: currentUser.display_name || '',
         job_title: currentUser.job_title || '',
         avatar_url: currentUser.avatar_url || '',
+        phone: currentUser.phone || '',
+        email: currentUser.email || '',
+        company: currentUser.company || '',
+        bio: currentUser.bio || '',
+        location: currentUser.location || '',
       });
     }
   }, [currentUser]);
@@ -149,6 +159,11 @@ function ProfileContent() {
         display_name: currentUser.display_name || '',
         job_title: currentUser.job_title || '',
         avatar_url: currentUser.avatar_url || '',
+        phone: currentUser.phone || '',
+        email: currentUser.email || '',
+        company: currentUser.company || '',
+        bio: currentUser.bio || '',
+        location: currentUser.location || '',
       });
     }
   };
@@ -171,6 +186,11 @@ function ProfileContent() {
           display_name: formData.display_name,
           job_title: formData.job_title || null,
           avatar_url: formData.avatar_url || null,
+          phone: formData.phone || null,
+          email: formData.email || null,
+          company: formData.company || null,
+          bio: formData.bio || null,
+          location: formData.location || null,
         }),
       });
 
@@ -331,6 +351,94 @@ function ProfileContent() {
                   disabled={isSaving}
                   className="border-gray-300"
                 />
+              </div>
+
+              {/* Professional Information Section */}
+              <div className="border-t border-gray-200 pt-4">
+                <h3 className="mb-4 text-sm font-semibold text-gray-900">Professional Information</h3>
+                
+                <div className="space-y-2">
+                  <Label htmlFor="company" className="text-sm font-medium">
+                    Company
+                  </Label>
+                  <Input
+                    id="company"
+                    type="text"
+                    placeholder="Your company name"
+                    value={formData.company}
+                    onChange={(e) => setFormData({ ...formData, company: e.target.value })}
+                    disabled={isSaving}
+                    className="border-gray-300"
+                  />
+                </div>
+
+                <div className="space-y-2">
+                  <Label htmlFor="location" className="text-sm font-medium">
+                    Location
+                  </Label>
+                  <Input
+                    id="location"
+                    type="text"
+                    placeholder="City, Country"
+                    value={formData.location}
+                    onChange={(e) => setFormData({ ...formData, location: e.target.value })}
+                    disabled={isSaving}
+                    className="border-gray-300"
+                  />
+                </div>
+
+                <div className="space-y-2">
+                  <Label htmlFor="bio" className="text-sm font-medium">
+                    Bio
+                  </Label>
+                  <textarea
+                    id="bio"
+                    placeholder="Tell us about yourself..."
+                    value={formData.bio}
+                    onChange={(e) => setFormData({ ...formData, bio: e.target.value })}
+                    disabled={isSaving}
+                    rows={3}
+                    className="w-full rounded-md border border-gray-300 px-3 py-2 text-sm placeholder-gray-400 focus:border-blue-500 focus:outline-none"
+                  />
+                </div>
+              </div>
+
+              {/* Contact Information Section */}
+              <div className="border-t border-gray-200 pt-4">
+                <h3 className="mb-4 text-sm font-semibold text-gray-900">Contact Information</h3>
+                
+                <div className="space-y-2">
+                  <Label htmlFor="email" className="text-sm font-medium">
+                    Email (Optional)
+                  </Label>
+                  <Input
+                    id="email"
+                    type="email"
+                    placeholder="Alternative email address"
+                    value={formData.email}
+                    onChange={(e) => setFormData({ ...formData, email: e.target.value })}
+                    disabled={isSaving}
+                    className="border-gray-300"
+                  />
+                  <p className="text-xs text-gray-500">
+                    Can be different from your account email
+                  </p>
+                </div>
+
+                <div className="space-y-2">
+                  <Label htmlFor="phone" className="text-sm font-medium">
+                    Phone Number (Optional)
+                  </Label>
+                  <Input
+                    id="phone"
+                    type="tel"
+                    placeholder="+1 (555) 123-4567"
+                    value={formData.phone}
+                    onChange={(e) => setFormData({ ...formData, phone: e.target.value })}
+                    disabled={isSaving}
+                    className="border-gray-300"
+                  />
+                </div>
               </div>
 
               {saveError && (

@@ -14,6 +14,12 @@ export interface UserProfile {
   display_name: string;
   job_title?: string | null;
   avatar_url?: string | null;
+  // Phase 5: Professional Profile Fields
+  phone?: string | null;
+  email?: string | null;
+  company?: string | null;
+  bio?: string | null;
+  location?: string | null;
   created_at: string;
   updated_at: string;
 }

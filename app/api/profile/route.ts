@@ -175,11 +175,27 @@ export async function POST(request: NextRequest) {
 
   try {
     const body = await request.json();
-    const { full_name, display_name, job_title, avatar_url } = body as {
+    const { 
+      full_name, 
+      display_name, 
+      job_title, 
+      avatar_url,
+      // New professional fields
+      phone,
+      email,
+      company,
+      bio,
+      location,
+    } = body as {
       full_name?: string;
       display_name?: string;
       job_title?: string | null;
       avatar_url?: string | null;
+      phone?: string | null;
+      email?: string | null;
+      company?: string | null;
+      bio?: string | null;
+      location?: string | null;
     };
 
     if (!full_name || !full_name.trim()) {
@@ -201,6 +217,11 @@ export async function POST(request: NextRequest) {
           display_name: displayName,
           job_title: job_title || null,
           avatar_url: avatar_url || null,
+          phone: phone || null,
+          email: email || null,
+          company: company || null,
+          bio: bio || null,
+          location: location || null,
         },
         { onConflict: 'id' }
       )
@@ -235,11 +256,27 @@ export async function PATCH(request: NextRequest) {
 
   try {
     const body = await request.json();
-    const { full_name, display_name, job_title, avatar_url } = body as {
+    const { 
+      full_name, 
+      display_name, 
+      job_title, 
+      avatar_url,
+      // New professional fields
+      phone,
+      email,
+      company,
+      bio,
+      location,
+    } = body as {
       full_name?: string;
       display_name?: string;
       job_title?: string | null;
       avatar_url?: string | null;
+      phone?: string | null;
+      email?: string | null;
+      company?: string | null;
+      bio?: string | null;
+      location?: string | null;
     };
 
     // Build updates object (only include provided fields)
@@ -248,6 +285,11 @@ export async function PATCH(request: NextRequest) {
     if (display_name !== undefined) updates.display_name = display_name.trim() || '';
     if (job_title !== undefined) updates.job_title = job_title || null;
     if (avatar_url !== undefined) updates.avatar_url = avatar_url || null;
+    if (phone !== undefined) updates.phone = phone || null;
+    if (email !== undefined) updates.email = email || null;
+    if (company !== undefined) updates.company = company || null;
+    if (bio !== undefined) updates.bio = bio || null;
+    if (location !== undefined) updates.location = location || null;
 
     if (Object.keys(updates).length === 0) {
       return NextResponse.json(

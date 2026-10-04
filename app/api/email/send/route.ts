@@ -27,19 +27,19 @@ export async function POST(request: NextRequest) {
 
     // Send email using configured provider (Resend or Console)
     const emailProvider = getEmailProvider();
-    const sent = await emailProvider.send(to, subject, html);
-
-    if (!sent) {
+    try {
+      await emailProvider.send(to, subject, html);
+      return NextResponse.json({
+        success: true,
+        message: 'Email sent successfully',
+      });
+    } catch (sendError) {
+      console.error('Email provider error:', sendError);
       return NextResponse.json(
         { error: 'Failed to send email' },
         { status: 500 },
       );
     }
-
-    return NextResponse.json({
-      success: true,
-      message: 'Email sent successfully',
-    });
   } catch (error) {
     console.error('Send email error:', error);
     return NextResponse.json(

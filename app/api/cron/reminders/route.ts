@@ -52,8 +52,8 @@ async function sendReminderEmail(
       body = createOverdueReminderEmail(taskDescription, dueDate, daysSinceOverdue);
     }
 
-    const success = await emailProvider.send(email, subject, body);
-    return success;
+    await emailProvider.send(email, subject, body);
+    return true;
   } catch (err) {
     console.error('Send reminder email error:', err);
     return false;

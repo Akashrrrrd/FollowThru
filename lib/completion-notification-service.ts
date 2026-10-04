@@ -378,23 +378,32 @@ FollowThru Team
     if (!notification) throw new Error('Notification not found or not in draft status');
 
     // Send email via provider (Resend or Console)
-    const emailSent = await this.emailProvider.send(
-      notification.recipient_email,
-      notification.subject,
-      notification.email_body,
-    );
+    try {
+      await this.emailProvider.send(
+        notification.recipient_email,
+        notification.subject,
+        notification.email_body,
+      );
 
-    // Update status based on send result
-    await this.supabase
-      .from('completion_notifications')
-      .update({
-        status: emailSent ? 'sent' : 'failed',
-        sent_at: new Date().toISOString(),
-      })
-      .eq('id', notificationId);
+      // Update status to sent
+      await this.supabase
+        .from('completion_notifications')
+        .update({
+          status: 'sent',
+          sent_at: new Date().toISOString(),
+        })
+        .eq('id', notificationId);
+    } catch (sendError) {
+      // Update status to failed
+      await this.supabase
+        .from('completion_notifications')
+        .update({
+          status: 'failed',
+          sent_at: new Date().toISOString(),
+        })
+        .eq('id', notificationId);
 
-    if (!emailSent) {
-      throw new Error('Failed to send email');
+      throw new Error(`Failed to send email: ${sendError instanceof Error ? sendError.message : 'Unknown error'}`);
     }
   }
 
@@ -548,19 +557,16 @@ FollowThru Team
       );
 
       // Try to send email
-      let emailSent = false;
       try {
-        emailSent = await this.emailProvider.send(responsible.email, subject, body);
-        if (emailSent) {
-          await this.supabase
-            .from('completion_notifications')
-            .update({
-              status: 'sent',
-              sent_at: new Date().toISOString(),
-            })
-            .eq('id', notificationId);
-          console.log(`[completion] Email sent for task ${taskId} to ${responsible.email}`);
-        }
+        await this.emailProvider.send(responsible.email, subject, body);
+        await this.supabase
+          .from('completion_notifications')
+          .update({
+            status: 'sent',
+            sent_at: new Date().toISOString(),
+          })
+          .eq('id', notificationId);
+        console.log(`[completion] Email sent for task ${taskId} to ${responsible.email}`);
       } catch (emailErr) {
         console.warn(`[completion] Email send failed for task ${taskId}:`, emailErr);
         // Don't fail the whole flow; Slack notification can still be sent

@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, useRef } from 'react';
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
 import { Loader2, AlertCircle, CheckCircle2, ChevronRight, ChevronLeft } from 'lucide-react';
@@ -10,9 +10,58 @@ import { Label } from '@/components/ui/label';
 import { supabase } from '@/lib/supabase-client';
 import { useAuthFetch } from '@/hooks/use-auth-fetch';
 
+// Rate limiting helper
+const SIGNUP_RATE_LIMIT_KEY = 'followthru_signup_attempts';
+const MAX_ATTEMPTS = 3;
+const ATTEMPT_WINDOW_MS = 60000; // 1 minute
+
+interface SignupAttempt {
+  timestamp: number;
+  count: number;
+}
+
+function getSignupAttempts(): SignupAttempt {
+  if (typeof window === 'undefined') return { timestamp: 0, count: 0 };
+  const stored = localStorage.getItem(SIGNUP_RATE_LIMIT_KEY);
+  if (!stored) return { timestamp: Date.now(), count: 0 };
+  try {
+    const parsed = JSON.parse(stored);
+    const now = Date.now();
+    // Reset if window expired
+    if (now - parsed.timestamp > ATTEMPT_WINDOW_MS) {
+      return { timestamp: now, count: 0 };
+    }
+    return parsed;
+  } catch {
+    return { timestamp: Date.now(), count: 0 };
+  }
+}
+
+function recordSignupAttempt(): { allowed: boolean; remaining: number; retryAfterSeconds: number } {
+  const attempts = getSignupAttempts();
+  const now = Date.now();
+  
+  if (now - attempts.timestamp > ATTEMPT_WINDOW_MS) {
+    // Window expired, reset
+    attempts.count = 1;
+    attempts.timestamp = now;
+  } else {
+    attempts.count++;
+  }
+
+  localStorage.setItem(SIGNUP_RATE_LIMIT_KEY, JSON.stringify(attempts));
+
+  const allowed = attempts.count <= MAX_ATTEMPTS;
+  const remaining = Math.max(0, MAX_ATTEMPTS - attempts.count);
+  const retryAfterSeconds = Math.ceil((attempts.timestamp + ATTEMPT_WINDOW_MS - now) / 1000);
+
+  return { allowed, remaining, retryAfterSeconds };
+}
+
 export default function SignupPage() {
   const router = useRouter();
   const authFetch = useAuthFetch();
+  const attemptCountRef = useRef(0);
   
   // Form state
   const [currentStep, setCurrentStep] = useState<'account' | 'personal' | 'contact' | 'professional'>(
@@ -120,9 +169,29 @@ export default function SignupPage() {
       return;
     }
 
+    // Check rate limiting
+    const { allowed, remaining, retryAfterSeconds } = recordSignupAttempt();
+    if (!allowed) {
+      setError(
+        `Too many sign-up attempts. Please try again in ${retryAfterSeconds} second${
+          retryAfterSeconds !== 1 ? 's' : ''
+        }.`
+      );
+      setLoading(false);
+      return;
+    }
+
     setLoading(true);
+    attemptCountRef.current++;
+    const currentAttempt = attemptCountRef.current;
 
     try {
+      // Exponential backoff: wait longer on each retry
+      const backoffDelay = Math.pow(2, currentAttempt - 1) * 100; // 100ms, 200ms, 400ms, etc.
+      if (currentAttempt > 1) {
+        await new Promise(resolve => setTimeout(resolve, backoffDelay));
+      }
+
       // Step 1: Sign up with auth
       const { data: authData, error: signUpError } = await supabase.auth.signUp({
         email: email.trim(),
@@ -130,7 +199,20 @@ export default function SignupPage() {
       });
 
       if (signUpError) {
-        setError(signUpError.message);
+        // Handle rate limiting from Supabase
+        if (signUpError.message?.includes('429') || signUpError.message?.includes('Too Many Requests')) {
+          setError(
+            'Sign-up service is temporarily busy. Please wait a moment and try again.'
+          );
+          // Retry available attempts - encourage wait
+          if (remaining > 0) {
+            setError(
+              `Sign-up service is busy. ${remaining} attempt${remaining !== 1 ? 's' : ''} remaining. Please wait before trying again.`
+            );
+          }
+        } else {
+          setError(signUpError.message);
+        }
         setLoading(false);
         return;
       }
@@ -171,9 +253,16 @@ export default function SignupPage() {
       }, 1500);
     } catch (err) {
       console.error('Signup error:', err);
-      setError(
-        err instanceof Error ? err.message : 'An unexpected error occurred. Please try again.'
-      );
+      const errorMsg = err instanceof Error ? err.message : 'An unexpected error occurred. Please try again.';
+      
+      // Detect rate limiting errors
+      if (errorMsg.includes('429') || errorMsg.includes('Too Many Requests')) {
+        setError(
+          `Service is temporarily rate limited. ${remaining} attempt${remaining !== 1 ? 's' : ''} remaining. Please wait before retrying.`
+        );
+      } else {
+        setError(errorMsg);
+      }
       setLoading(false);
     }
   };
@@ -402,7 +491,14 @@ export default function SignupPage() {
           {error && (
             <div className="flex items-start gap-2 rounded-md border border-red-200 bg-red-50 p-3 text-sm text-red-700">
               <AlertCircle className="h-4 w-4 shrink-0 mt-0.5" />
-              <div>{error}</div>
+              <div>
+                <div>{error}</div>
+                {error.includes('rate limit') || error.includes('Too many') ? (
+                  <p className="text-xs mt-1 opacity-80">
+                    This is a temporary limitation. Please wait a moment before trying again.
+                  </p>
+                ) : null}
+              </div>
             </div>
           )}
 

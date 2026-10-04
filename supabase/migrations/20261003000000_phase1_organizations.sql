@@ -170,14 +170,16 @@ ON CONFLICT DO NOTHING;
 
 -- Backfill organization_id in meetings
 -- For each meeting, assign to the org of the meeting creator
+-- Cast user_id to uuid for comparison with organization_members
 UPDATE public.meetings m
 SET organization_id = (
   SELECT om.organization_id 
   FROM public.organization_members om
-  WHERE om.user_id = m.user_id
+  WHERE om.user_id = m.user_id::uuid
   LIMIT 1
 )
-WHERE m.organization_id IS NULL;
+WHERE m.organization_id IS NULL
+AND m.user_id != 'demo-user';
 
 -- Backfill organization_id in tasks
 -- For each task, inherit from parent meeting
@@ -192,33 +194,36 @@ AND t.meeting_id IS NOT NULL;
 
 -- Backfill organization_id in integration_clients
 -- For each integration, assign to the org of the integration owner
+-- Cast user_id to uuid for comparison with organization_members
 UPDATE public.integration_clients ic
 SET organization_id = (
   SELECT om.organization_id
   FROM public.organization_members om
-  WHERE om.user_id = ic.user_id
+  WHERE om.user_id = ic.user_id::uuid
   LIMIT 1
 )
 WHERE ic.organization_id IS NULL;
 
 -- Backfill organization_id in executive_metrics
 -- For each metric, assign to the org of the user
+-- Cast user_id to uuid for comparison with organization_members
 UPDATE public.executive_metrics em
 SET organization_id = (
   SELECT om.organization_id
   FROM public.organization_members om
-  WHERE om.user_id = em.user_id
+  WHERE om.user_id = em.user_id::uuid
   LIMIT 1
 )
 WHERE em.organization_id IS NULL;
 
 -- Backfill organization_id in sync_jobs
 -- For each job, assign to the org of the user
+-- Cast user_id to uuid for comparison with organization_members
 UPDATE public.sync_jobs sj
 SET organization_id = (
   SELECT om.organization_id
   FROM public.organization_members om
-  WHERE om.user_id = sj.user_id
+  WHERE om.user_id = sj.user_id::uuid
   LIMIT 1
 )
 WHERE sj.organization_id IS NULL;

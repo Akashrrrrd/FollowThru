@@ -126,6 +126,8 @@ export class TeamInvitationService {
     userId: string,
     userEmail: string | null,
   ): Promise<void> {
+    console.log(`[acceptInvitation] Accepting invitation for user ${userId} email ${userEmail}`);
+    
     const invitation = await this.getInvitationByToken(token);
 
     if (!invitation) {

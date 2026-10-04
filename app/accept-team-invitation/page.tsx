@@ -100,7 +100,10 @@ function AcceptTeamInvitationContent() {
       }
 
       setStatus('success');
-      setTimeout(() => router.push('/teams'), 2000);
+      
+      // Allow 1 second for database writes to complete, then redirect
+      // This ensures the invited user's org/team membership is queryable
+      setTimeout(() => router.push('/teams'), 1000);
     } catch (err) {
       console.error('Error accepting invitation:', err);
       setStatus('error');

@@ -1,6 +1,6 @@
 /**
- * POST /api/teams/invitations/accept
- * Accept a team invitation by token
+ * GET  /api/teams/invitations/accept?token=...  - invitation details (public)
+ * POST /api/teams/invitations/accept            - accept invitation (auth required)
  */
 
 import { NextRequest, NextResponse } from 'next/server';
@@ -17,13 +17,10 @@ export async function POST(request: NextRequest) {
     const user = await getUserFromRequest(request);
 
     if (!user) {
-      return NextResponse.json(
-        { error: 'Unauthorized' },
-        { status: 401 },
-      );
+      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     }
 
-    const { token } = await request.json() as { token?: string };
+    const { token } = (await request.json()) as { token?: string };
 
     if (!token || typeof token !== 'string') {
       return NextResponse.json(
@@ -35,8 +32,20 @@ export async function POST(request: NextRequest) {
     const supabase = createServerClient();
     const invitationService = new TeamInvitationService(supabase);
 
-    // Accept the invitation
-    await invitationService.acceptInvitation(token, user.userId);
+    // Look up the signed-in user's email so we can verify it matches the invite.
+    const { data: authUser, error: authError } =
+      await supabase.auth.admin.getUserById(user.userId);
+
+    if (authError || !authUser?.user) {
+      console.error('Failed to resolve accepting user:', authError);
+      return NextResponse.json({ error: 'Failed to accept invitation' }, { status: 500 });
+    }
+
+    await invitationService.acceptInvitation(
+      token,
+      user.userId,
+      authUser.user.email ?? null,
+    );
 
     return NextResponse.json(
       { message: 'Invitation accepted successfully' },
@@ -52,11 +61,11 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    if (errorMessage.includes('not a member of this organization')) {
+    if (errorMessage.includes('email mismatch')) {
       return NextResponse.json(
         {
           error:
-            'You are not a member of this organization. Please join first.',
+            'This invitation was sent to a different email address. Please sign in with the invited email.',
         },
         { status: 403 },
       );
@@ -73,8 +82,7 @@ export async function POST(request: NextRequest) {
 
 export async function GET(request: NextRequest) {
   try {
-    const { searchParams } = new URL(request.url);
-    const token = searchParams.get('token');
+    const token = new URL(request.url).searchParams.get('token');
 
     if (!token) {
       return NextResponse.json(
@@ -86,7 +94,6 @@ export async function GET(request: NextRequest) {
     const supabase = createServerClient();
     const invitationService = new TeamInvitationService(supabase);
 
-    // Get invitation details without requiring authentication
     const details = await invitationService.getInvitationWithDetails(token);
 
     if (!details) {

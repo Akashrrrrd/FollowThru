@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useState, useCallback } from 'react';
-import { Plus, Trash2, Edit2, Users, Loader2 } from 'lucide-react';
+import { Plus, Trash2, Edit2, Users, Loader2, Mail } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import {
   Dialog,
@@ -24,6 +24,14 @@ interface TeamWithMembers extends Team {
   user_role?: 'team_lead' | 'member';
 }
 
+interface PendingInvitation {
+  id: string;
+  email: string;
+  role: 'team_lead' | 'member';
+  created_at: string;
+  token_expires_at: string;
+}
+
 function TeamsContent() {
   const authFetch = useAuthFetch();
   const { toast } = useToast();
@@ -43,10 +51,11 @@ function TeamsContent() {
   const [createForm, setCreateForm] = useState({ name: '', description: '' });
   const [editForm, setEditForm] = useState({ name: '', description: '' });
   const [addMemberEmail, setAddMemberEmail] = useState('');
+  const [addingMember, setAddingMember] = useState(false);
   const [teamMembers, setTeamMembers] = useState<TeamMember[]>([]);
+  const [pendingInvitations, setPendingInvitations] = useState<PendingInvitation[]>([]);
   const [membersLoading, setMembersLoading] = useState(false);
 
-  // Fetch teams
   const fetchTeams = useCallback(async () => {
     setLoading(true);
     setError(null);
@@ -61,11 +70,8 @@ function TeamsContent() {
         return;
       }
 
-      // Check if user is manager (if they can see all teams, they're a manager)
-      // For now, we'll check in a separate call
       setTeams(data.teams || []);
-      setIsManager(true); // Assume manager if successfully fetched (API validates)
-
+      setIsManager(true); // API enforces real permissions
       setLoading(false);
     } catch (err) {
       console.error('Error fetching teams:', err);
@@ -74,7 +80,6 @@ function TeamsContent() {
     }
   }, [authFetch]);
 
-  // Fetch team members
   const fetchTeamMembers = useCallback(
     async (teamId: string) => {
       setMembersLoading(true);
@@ -85,11 +90,11 @@ function TeamsContent() {
 
         if (!res.ok) {
           toast({ title: 'Error', description: data.error || 'Failed to load members' });
-          setMembersLoading(false);
           return;
         }
 
         setTeamMembers(data.members || []);
+        setPendingInvitations(data.invitations || []);
       } catch (err) {
         console.error('Error fetching team members:', err);
         toast({ title: 'Error', description: 'Failed to load members' });
@@ -104,7 +109,6 @@ function TeamsContent() {
     fetchTeams();
   }, [fetchTeams]);
 
-  // Handle create team
   const handleCreateTeam = async (e: React.FormEvent) => {
     e.preventDefault();
 
@@ -139,7 +143,6 @@ function TeamsContent() {
     }
   };
 
-  // Handle update team
   const handleUpdateTeam = async (e: React.FormEvent) => {
     e.preventDefault();
 
@@ -167,23 +170,25 @@ function TeamsContent() {
       toast({ title: 'Success', description: 'Team updated' });
       setEditOpen(false);
       await fetchTeams();
-      setSelectedTeam(null);
+      // Keep the details dialog in sync instead of dropping the selection
+      setSelectedTeam({
+        ...selectedTeam,
+        name: editForm.name.trim(),
+        description: editForm.description.trim() || null,
+      } as TeamWithMembers);
     } catch (err) {
       console.error('Error updating team:', err);
       toast({ title: 'Error', description: 'Failed to update team' });
     }
   };
 
-  // Handle delete team
   const handleDeleteTeam = async (teamId: string, teamName: string) => {
     if (!confirm(`Are you sure you want to delete "${teamName}"?`)) {
       return;
     }
 
     try {
-      const res = await authFetch(`/api/teams/${teamId}`, {
-        method: 'DELETE',
-      });
+      const res = await authFetch(`/api/teams/${teamId}`, { method: 'DELETE' });
 
       if (!res.ok) {
         const data = await res.json();
@@ -201,7 +206,6 @@ function TeamsContent() {
     }
   };
 
-  // Handle add member
   const handleAddMember = async (e: React.FormEvent) => {
     e.preventDefault();
 
@@ -209,6 +213,8 @@ function TeamsContent() {
       toast({ title: 'Error', description: 'Email is required' });
       return;
     }
+
+    setAddingMember(true);
 
     try {
       const res = await authFetch(`/api/teams/${selectedTeam.id}/members`, {
@@ -226,16 +232,27 @@ function TeamsContent() {
         return;
       }
 
-      toast({ title: 'Success', description: 'Member added to team' });
+      // The API returns either an added member, an invitation message, or a
+      // warning (invitation saved but email delivery failed).
+      if (data.warning) {
+        toast({ title: 'Invitation created', description: data.warning });
+      } else {
+        toast({
+          title: 'Success',
+          description: data.message || 'Member added to team',
+        });
+      }
+
       setAddMemberEmail('');
       await fetchTeamMembers(selectedTeam.id);
     } catch (err) {
       console.error('Error adding member:', err);
       toast({ title: 'Error', description: 'Failed to add member' });
+    } finally {
+      setAddingMember(false);
     }
   };
 
-  // Handle remove member
   const handleRemoveMember = async (memberId: string, email: string) => {
     if (!selectedTeam) return;
 
@@ -262,7 +279,6 @@ function TeamsContent() {
     }
   };
 
-  // Handle update member role
   const handleUpdateMemberRole = async (memberId: string, newRole: 'team_lead' | 'member') => {
     if (!selectedTeam) return;
 
@@ -289,6 +305,7 @@ function TeamsContent() {
   const handleOpenTeamDetails = async (team: TeamWithMembers) => {
     setSelectedTeam(team);
     setEditForm({ name: team.name, description: team.description || '' });
+    setPendingInvitations([]);
     await fetchTeamMembers(team.id);
     setDetailsOpen(true);
   };
@@ -301,6 +318,50 @@ function TeamsContent() {
     return <PageError message={error} />;
   }
 
+  // Single create-team dialog, reused by the header and the empty state
+  const renderCreateDialog = (label: string) => (
+    <Dialog open={createOpen} onOpenChange={setCreateOpen}>
+      <DialogTrigger asChild>
+        <Button className="gap-2">
+          <Plus className="h-4 w-4" />
+          {label}
+        </Button>
+      </DialogTrigger>
+      <DialogContent>
+        <DialogHeader>
+          <DialogTitle>Create New Team</DialogTitle>
+        </DialogHeader>
+        <form onSubmit={handleCreateTeam} className="space-y-4">
+          <div>
+            <label className="block text-sm font-medium text-gray-900">Team Name</label>
+            <Input
+              placeholder="e.g., Engineering, Marketing"
+              value={createForm.name}
+              onChange={(e) => setCreateForm({ ...createForm, name: e.target.value })}
+              required
+            />
+          </div>
+          <div>
+            <label className="block text-sm font-medium text-gray-900">
+              Description (optional)
+            </label>
+            <Textarea
+              placeholder="Team description and purpose"
+              value={createForm.description}
+              onChange={(e) => setCreateForm({ ...createForm, description: e.target.value })}
+            />
+          </div>
+          <DialogFooter>
+            <Button type="button" variant="outline" onClick={() => setCreateOpen(false)}>
+              Cancel
+            </Button>
+            <Button type="submit">Create Team</Button>
+          </DialogFooter>
+        </form>
+      </DialogContent>
+    </Dialog>
+  );
+
   return (
     <div className="mx-auto max-w-6xl space-y-6 px-4 py-8">
       {/* Header */}
@@ -312,56 +373,7 @@ function TeamsContent() {
           </p>
         </div>
 
-        {isManager && (
-          <Dialog open={createOpen} onOpenChange={setCreateOpen}>
-            <DialogTrigger asChild>
-              <Button className="gap-2">
-                <Plus className="h-4 w-4" />
-                New Team
-              </Button>
-            </DialogTrigger>
-            <DialogContent>
-              <DialogHeader>
-                <DialogTitle>Create New Team</DialogTitle>
-              </DialogHeader>
-              <form onSubmit={handleCreateTeam} className="space-y-4">
-                <div>
-                  <label className="block text-sm font-medium text-gray-900">Team Name</label>
-                  <Input
-                    placeholder="e.g., Engineering, Marketing"
-                    value={createForm.name}
-                    onChange={(e) =>
-                      setCreateForm({ ...createForm, name: e.target.value })
-                    }
-                    required
-                  />
-                </div>
-                <div>
-                  <label className="block text-sm font-medium text-gray-900">
-                    Description (optional)
-                  </label>
-                  <Textarea
-                    placeholder="Team description and purpose"
-                    value={createForm.description}
-                    onChange={(e) =>
-                      setCreateForm({ ...createForm, description: e.target.value })
-                    }
-                  />
-                </div>
-                <DialogFooter>
-                  <Button
-                    type="button"
-                    variant="outline"
-                    onClick={() => setCreateOpen(false)}
-                  >
-                    Cancel
-                  </Button>
-                  <Button type="submit">Create Team</Button>
-                </DialogFooter>
-              </form>
-            </DialogContent>
-          </Dialog>
-        )}
+        {isManager && renderCreateDialog('New Team')}
       </div>
 
       {/* Teams Grid */}
@@ -369,60 +381,7 @@ function TeamsContent() {
         <EmptyState
           title="No teams yet"
           description="Create your first team to get started organizing your members"
-          action={
-            isManager ? (
-              <Dialog open={createOpen} onOpenChange={setCreateOpen}>
-                <DialogTrigger asChild>
-                  <Button className="gap-2">
-                    <Plus className="h-4 w-4" />
-                    Create Team
-                  </Button>
-                </DialogTrigger>
-                <DialogContent>
-                  <DialogHeader>
-                    <DialogTitle>Create New Team</DialogTitle>
-                  </DialogHeader>
-                  <form onSubmit={handleCreateTeam} className="space-y-4">
-                    <div>
-                      <label className="block text-sm font-medium text-gray-900">
-                        Team Name
-                      </label>
-                      <Input
-                        placeholder="e.g., Engineering, Marketing"
-                        value={createForm.name}
-                        onChange={(e) =>
-                          setCreateForm({ ...createForm, name: e.target.value })
-                        }
-                        required
-                      />
-                    </div>
-                    <div>
-                      <label className="block text-sm font-medium text-gray-900">
-                        Description (optional)
-                      </label>
-                      <Textarea
-                        placeholder="Team description and purpose"
-                        value={createForm.description}
-                        onChange={(e) =>
-                          setCreateForm({ ...createForm, description: e.target.value })
-                        }
-                      />
-                    </div>
-                    <DialogFooter>
-                      <Button
-                        type="button"
-                        variant="outline"
-                        onClick={() => setCreateOpen(false)}
-                      >
-                        Cancel
-                      </Button>
-                      <Button type="submit">Create Team</Button>
-                    </DialogFooter>
-                  </form>
-                </DialogContent>
-              </Dialog>
-            ) : undefined
-          }
+          action={isManager ? renderCreateDialog('Create Team') : undefined}
         />
       ) : (
         <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
@@ -460,7 +419,6 @@ function TeamsContent() {
               </DialogHeader>
 
               <div className="space-y-6">
-                {/* Team Info */}
                 <div className="space-y-2">
                   <p className="text-sm font-medium text-gray-900">Description</p>
                   <p className="text-sm text-gray-600">
@@ -468,7 +426,6 @@ function TeamsContent() {
                   </p>
                 </div>
 
-                {/* Members Section */}
                 <div className="space-y-4">
                   <div className="flex items-center justify-between">
                     <p className="text-sm font-medium text-gray-900">Members</p>
@@ -548,7 +505,7 @@ function TeamsContent() {
                             </div>
 
                             <div className="flex items-center gap-2">
-                              {isManager && (
+                              {isManager ? (
                                 <>
                                   <select
                                     value={member.role}
@@ -573,8 +530,7 @@ function TeamsContent() {
                                     <Trash2 className="h-4 w-4 text-red-600" />
                                   </Button>
                                 </>
-                              )}
-                              {!isManager && (
+                              ) : (
                                 <span className="text-xs text-gray-500 capitalize">
                                   {member.role.replace('_', ' ')}
                                 </span>
@@ -586,16 +542,39 @@ function TeamsContent() {
                     </div>
                   )}
 
-                  {/* Add Member Form */}
+                  {/* Pending invitations */}
+                  {isManager && pendingInvitations.length > 0 && (
+                    <div className="space-y-2">
+                      <p className="text-sm font-medium text-gray-900">Pending invitations</p>
+                      {pendingInvitations.map((inv) => (
+                        <div
+                          key={inv.id}
+                          className="flex items-center justify-between rounded border border-dashed border-gray-300 bg-gray-50 p-3"
+                        >
+                          <div className="flex items-center gap-2">
+                            <Mail className="h-4 w-4 text-gray-400" />
+                            <span className="text-sm text-gray-700">{inv.email}</span>
+                          </div>
+                          <span className="text-xs text-gray-500">
+                            expires {new Date(inv.token_expires_at).toLocaleDateString()}
+                          </span>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+
+                  {/* Add Member / Invite Form */}
                   {isManager && (
                     <form onSubmit={handleAddMember} className="flex gap-2 pt-2">
                       <Input
-                        placeholder="Enter email to add member"
+                        placeholder="Enter email to add or invite"
                         type="email"
                         value={addMemberEmail}
                         onChange={(e) => setAddMemberEmail(e.target.value)}
                       />
-                      <Button type="submit">Add</Button>
+                      <Button type="submit" disabled={addingMember}>
+                        {addingMember ? <Loader2 className="h-4 w-4 animate-spin" /> : 'Add'}
+                      </Button>
                     </form>
                   )}
                 </div>
@@ -605,9 +584,7 @@ function TeamsContent() {
                 {isManager && selectedTeam.name !== 'General' && (
                   <Button
                     variant="destructive"
-                    onClick={() =>
-                      handleDeleteTeam(selectedTeam.id, selectedTeam.name)
-                    }
+                    onClick={() => handleDeleteTeam(selectedTeam.id, selectedTeam.name)}
                   >
                     <Trash2 className="mr-2 h-4 w-4" />
                     Delete Team

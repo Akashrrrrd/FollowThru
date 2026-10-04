@@ -1,16 +1,18 @@
 /**
  * Email Provider Abstraction
- * 
+ *
  * Supports multiple email providers with a unified interface:
  * - Resend (recommended, simple API)
  * - Console (development, logs to stdout)
- * - Custom (placeholder for other providers)
+ *
+ * Fixes vs. previous version:
+ *  - `interface EmailProvider` and `class EmailProvider` shared a name
+ *    (duplicate identifier). The interface is now `IEmailProvider`.
+ *  - send() returned `false` on failure, so callers' try/catch never ran and
+ *    failed deliveries were reported as "Invitation sent". It now throws.
+ *  - Plain-text body is now sent to Resend.
+ *  - Sender address is configurable via EMAIL_FROM.
  */
-
-export interface EmailProvider {
-  send(to: string, subject: string, body: string): Promise<boolean>;
-  send(options: { to: string; subject: string; html: string; text?: string }): Promise<boolean>;
-}
 
 export interface EmailOptions {
   to: string;
@@ -19,89 +21,86 @@ export interface EmailOptions {
   text?: string;
 }
 
-class ConsoleEmailProvider implements EmailProvider {
-  async send(toOrOptions: any, subject?: string, body?: string): Promise<boolean> {
-    if (typeof toOrOptions === 'object') {
-      // New signature: send({to, subject, html, text})
-      const { to, subject: subj, html, text } = toOrOptions;
-      console.log(`\n[EMAIL - CONSOLE MODE]\nTo: ${to}\nSubject: ${subj}\n\n${html || text}\n`);
-    } else {
-      // Old signature: send(to, subject, body)
-      console.log(`\n[EMAIL - CONSOLE MODE]\nTo: ${toOrOptions}\nSubject: ${subject}\n\n${body}\n`);
-    }
-    return true;
+export interface IEmailProvider {
+  send(options: EmailOptions): Promise<void>;
+  /** Legacy signature: send(to, subject, htmlBody) */
+  send(to: string, subject: string, body: string): Promise<void>;
+}
+
+function normalizeArgs(
+  toOrOptions: string | EmailOptions,
+  subject?: string,
+  body?: string,
+): EmailOptions {
+  if (typeof toOrOptions === 'object') return toOrOptions;
+  return { to: toOrOptions, subject: subject ?? '', html: body ?? '' };
+}
+
+class ConsoleEmailProvider implements IEmailProvider {
+  async send(options: EmailOptions): Promise<void>;
+  async send(to: string, subject: string, body: string): Promise<void>;
+  async send(toOrOptions: string | EmailOptions, subject?: string, body?: string): Promise<void> {
+    const { to, subject: subj, html, text } = normalizeArgs(toOrOptions, subject, body);
+    console.log(
+      `\n[EMAIL - CONSOLE MODE]\nTo: ${to}\nSubject: ${subj}\n\n${text || html}\n`,
+    );
   }
 }
 
-class ResendEmailProvider implements EmailProvider {
+class ResendEmailProvider implements IEmailProvider {
   private apiKey: string;
+  private from: string;
 
-  constructor(apiKey: string) {
+  constructor(apiKey: string, from: string) {
     this.apiKey = apiKey;
+    this.from = from;
   }
 
-  async send(toOrOptions: any, subject?: string, body?: string): Promise<boolean> {
-    try {
-      let to: string;
-      let finalSubject: string;
-      let html: string;
+  async send(options: EmailOptions): Promise<void>;
+  async send(to: string, subject: string, body: string): Promise<void>;
+  async send(toOrOptions: string | EmailOptions, subject?: string, body?: string): Promise<void> {
+    const { to, subject: subj, html, text } = normalizeArgs(toOrOptions, subject, body);
 
-      if (typeof toOrOptions === 'object') {
-        // New signature: send({to, subject, html, text})
-        to = toOrOptions.to;
-        finalSubject = toOrOptions.subject;
-        html = toOrOptions.html;
-      } else {
-        // Old signature: send(to, subject, body)
-        to = toOrOptions;
-        finalSubject = subject || '';
-        html = body || '';
-      }
+    const response = await fetch('https://api.resend.com/emails', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${this.apiKey}`,
+      },
+      body: JSON.stringify({
+        from: this.from,
+        to,
+        subject: subj,
+        html,
+        ...(text ? { text } : {}),
+      }),
+    });
 
-      const response = await fetch('https://api.resend.com/emails', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${this.apiKey}`,
-        },
-        body: JSON.stringify({
-          from: 'FollowThru <noreply@followthru.app>',
-          to,
-          subject: finalSubject,
-          html,
-        }),
-      });
-
-      if (!response.ok) {
-        console.error('Resend API error:', response.statusText);
-        return false;
-      }
-
-      return true;
-    } catch (err) {
-      console.error('Resend send error:', err);
-      return false;
+    if (!response.ok) {
+      const detail = await response.text().catch(() => response.statusText);
+      throw new Error(`Resend API error (${response.status}): ${detail}`);
     }
   }
 }
 
-export function getEmailProvider(): EmailProvider {
+export function getEmailProvider(): IEmailProvider {
   const apiKey = process.env.RESEND_API_KEY;
+  // The "from" domain must be verified in Resend. For testing you can use
+  // 'FollowThru <onboarding@resend.dev>' (only delivers to your own address).
+  const from = process.env.EMAIL_FROM || 'FollowThru <noreply@followthru.app>';
 
   if (apiKey) {
-    return new ResendEmailProvider(apiKey);
+    return new ResendEmailProvider(apiKey, from);
   }
 
-  // Fall back to console for development if no API key
   console.warn('[EMAIL] RESEND_API_KEY not set. Using console provider.');
   return new ConsoleEmailProvider();
 }
 
-// Singleton instance
-let instance: EmailProvider | null = null;
+let instance: IEmailProvider | null = null;
 
 export class EmailProvider {
-  static getInstance(): EmailProvider {
+  static getInstance(): IEmailProvider {
     if (!instance) {
       instance = getEmailProvider();
     }
@@ -110,7 +109,7 @@ export class EmailProvider {
 }
 
 /**
- * Email templates
+ * Email templates (reminders) — unchanged
  */
 
 export function createUpcomingReminderEmail(
@@ -149,16 +148,16 @@ export function createUpcomingReminderEmail(
       <div class="body">
         <p>Hi,</p>
         <p>You have a commitment due in <strong>${daysUntilDue} day${daysUntilDue === 1 ? '' : 's'}</strong>:</p>
-        
+
         <div class="commitment">
           <p><strong>${taskDescription}</strong></p>
           <p>Due: <span class="due-date">${dateStr}</span></p>
         </div>
-        
+
         <p>Make sure to keep this commitment on track!</p>
-        
+
         <a href="https://followthru.app/dashboard" class="button">View Dashboard</a>
-        
+
         <div class="footer">
           <p>This is an automated reminder from FollowThru.</p>
         </div>
@@ -201,16 +200,16 @@ export function createOverdueReminderEmail(taskDescription: string, dueDate: str
       <div class="body">
         <p>Hi,</p>
         <p>The following commitment is <strong>${daysSinceOverdue} day${daysSinceOverdue === 1 ? '' : 's'} overdue</strong>:</p>
-        
+
         <div class="commitment">
           <p><strong>${taskDescription}</strong></p>
           <p>Was due: <span class="due-date">${dateStr}</span></p>
         </div>
-        
+
         <p>Please update the status or let us know if you need help.</p>
-        
+
         <a href="https://followthru.app/dashboard" class="button">Update Status</a>
-        
+
         <div class="footer">
           <p>This is an automated reminder from FollowThru.</p>
         </div>

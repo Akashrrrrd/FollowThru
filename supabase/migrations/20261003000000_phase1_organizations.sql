@@ -44,7 +44,7 @@ CREATE POLICY "users_can_view_their_orgs" ON public.organizations FOR SELECT
   );
 
 -- Indexes
-CREATE INDEX idx_organizations_created_at ON public.organizations(created_at);
+CREATE INDEX IF NOT EXISTS idx_organizations_created_at ON public.organizations(created_at);
 
 -- ============================================================================
 

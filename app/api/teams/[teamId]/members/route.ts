@@ -221,7 +221,9 @@ export async function POST(
       if (foundUser) targetUserId = foundUser.id;
     }
 
-    // ---- Existing user: add directly (must already be in this organization) ----
+    // ---- Existing user: check organization membership ----
+    let isOrgMember = false;
+
     if (targetUserId) {
       const { data: orgMember, error: orgError } = await supabase
         .from('organization_members')
@@ -238,13 +240,21 @@ export async function POST(
         );
       }
 
-      if (!orgMember) {
+      isOrgMember = !!orgMember;
+
+      // A raw userId that is outside the org can't be invited (no email).
+      if (!isOrgMember && !normalizedEmail) {
         return NextResponse.json(
           { error: 'User is not a member of this organization' },
           { status: 400 },
         );
       }
+    }
 
+    // Already in the organization: add straight to the team.
+    // (An existing account that is NOT in the org falls through to the
+    // invitation flow below; accepting the invite adds them to the org.)
+    if (targetUserId && isOrgMember) {
       const { data: member, error } = await supabase
         .from('team_members')
         .insert({ team_id: params.teamId, user_id: targetUserId, role })

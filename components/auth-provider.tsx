@@ -42,7 +42,21 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   // Load organization context when user changes
   const loadOrganization = useCallback(async (userId: string) => {
     try {
-      const response = await fetch('/api/organizations/current');
+      // Get the session token to pass to the API
+      const { data: { session } } = await supabase.auth.getSession();
+      if (!session?.access_token) {
+        console.warn('[auth-provider] No access token available for organization load');
+        setOrganization(null);
+        return;
+      }
+
+      const response = await fetch('/api/organizations/current', {
+        headers: {
+          'Authorization': `Bearer ${session.access_token}`,
+          'Content-Type': 'application/json',
+        },
+      });
+
       if (response.ok) {
         const data = await response.json();
         setOrganization(data);

@@ -9,11 +9,26 @@
 
 export interface EmailProvider {
   send(to: string, subject: string, body: string): Promise<boolean>;
+  send(options: { to: string; subject: string; html: string; text?: string }): Promise<boolean>;
+}
+
+export interface EmailOptions {
+  to: string;
+  subject: string;
+  html: string;
+  text?: string;
 }
 
 class ConsoleEmailProvider implements EmailProvider {
-  async send(to: string, subject: string, body: string): Promise<boolean> {
-    console.log(`\n[EMAIL - CONSOLE MODE]\nTo: ${to}\nSubject: ${subject}\n\n${body}\n`);
+  async send(toOrOptions: any, subject?: string, body?: string): Promise<boolean> {
+    if (typeof toOrOptions === 'object') {
+      // New signature: send({to, subject, html, text})
+      const { to, subject: subj, html, text } = toOrOptions;
+      console.log(`\n[EMAIL - CONSOLE MODE]\nTo: ${to}\nSubject: ${subj}\n\n${html || text}\n`);
+    } else {
+      // Old signature: send(to, subject, body)
+      console.log(`\n[EMAIL - CONSOLE MODE]\nTo: ${toOrOptions}\nSubject: ${subject}\n\n${body}\n`);
+    }
     return true;
   }
 }
@@ -25,8 +40,24 @@ class ResendEmailProvider implements EmailProvider {
     this.apiKey = apiKey;
   }
 
-  async send(to: string, subject: string, body: string): Promise<boolean> {
+  async send(toOrOptions: any, subject?: string, body?: string): Promise<boolean> {
     try {
+      let to: string;
+      let finalSubject: string;
+      let html: string;
+
+      if (typeof toOrOptions === 'object') {
+        // New signature: send({to, subject, html, text})
+        to = toOrOptions.to;
+        finalSubject = toOrOptions.subject;
+        html = toOrOptions.html;
+      } else {
+        // Old signature: send(to, subject, body)
+        to = toOrOptions;
+        finalSubject = subject || '';
+        html = body || '';
+      }
+
       const response = await fetch('https://api.resend.com/emails', {
         method: 'POST',
         headers: {
@@ -36,8 +67,8 @@ class ResendEmailProvider implements EmailProvider {
         body: JSON.stringify({
           from: 'FollowThru <noreply@followthru.app>',
           to,
-          subject,
-          html: body,
+          subject: finalSubject,
+          html,
         }),
       });
 
@@ -64,6 +95,18 @@ export function getEmailProvider(): EmailProvider {
   // Fall back to console for development if no API key
   console.warn('[EMAIL] RESEND_API_KEY not set. Using console provider.');
   return new ConsoleEmailProvider();
+}
+
+// Singleton instance
+let instance: EmailProvider | null = null;
+
+export class EmailProvider {
+  static getInstance(): EmailProvider {
+    if (!instance) {
+      instance = getEmailProvider();
+    }
+    return instance;
+  }
 }
 
 /**

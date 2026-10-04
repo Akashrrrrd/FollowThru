@@ -148,10 +148,12 @@ export class TeamInvitationService {
       .maybeSingle();
 
     if (orgError) {
+      console.error(`[acceptInvitation] Failed to check org membership:`, orgError);
       throw new Error(`Failed to verify organization membership: ${orgError.message}`);
     }
 
     if (!orgMember) {
+      console.log(`[acceptInvitation] User ${userId} not in org ${invitation.organization_id}, adding...`);
       const { error: joinError } = await this.supabase
         .from('organization_members')
         .insert({
@@ -162,8 +164,12 @@ export class TeamInvitationService {
 
       // 23505 = already a member (race) -> fine
       if (joinError && joinError.code !== '23505') {
+        console.error(`[acceptInvitation] Failed to join org:`, joinError);
         throw new Error(`Failed to join organization: ${joinError.message}`);
       }
+      console.log(`[acceptInvitation] Successfully added user ${userId} to org ${invitation.organization_id}`);
+    } else {
+      console.log(`[acceptInvitation] User ${userId} already in org ${invitation.organization_id}`);
     }
 
     // Add to team if not already a member
@@ -188,8 +194,13 @@ export class TeamInvitationService {
         });
 
       if (insertError && insertError.code !== '23505') {
+        console.error(`[acceptInvitation] Failed to add user ${userId} to team ${invitation.team_id}:`, insertError);
         throw new Error(`Failed to add user to team: ${insertError.message}`);
       }
+      
+      console.log(`[acceptInvitation] Successfully added user ${userId} to team ${invitation.team_id} with role ${invitation.role}`);
+    } else {
+      console.log(`[acceptInvitation] User ${userId} already a member of team ${invitation.team_id}`);
     }
 
     // Mark accepted (guard on status so a double-click can't re-accept)

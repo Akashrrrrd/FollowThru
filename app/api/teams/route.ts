@@ -15,12 +15,15 @@ export async function GET(request: NextRequest) {
     const user = await getUserFromRequest(request);
 
     if (!user) {
+      console.log('[/api/teams] No user from request');
       return NextResponse.json(
         { error: 'Unauthorized' },
         { status: 401 }
       );
     }
 
+    console.log(`[/api/teams] User ${user.userId} requesting teams`);
+    
     const supabase = createServerClient();
 
     // Get user's organization
@@ -30,11 +33,14 @@ export async function GET(request: NextRequest) {
     );
 
     if (!orgContext) {
+      console.log(`[/api/teams] User ${user.userId} has no organization`);
       return NextResponse.json(
         { error: 'User has no organization' },
         { status: 403 }
       );
     }
+
+    console.log(`[/api/teams] User ${user.userId} org ${orgContext.organizationId}`);
 
     // Query team_members to find teams where the current user is a member
     const { data: userMemberships, error: membershipError } = await supabase
@@ -43,7 +49,7 @@ export async function GET(request: NextRequest) {
       .eq('user_id', user.userId);
 
     if (membershipError) {
-      console.error('Failed to fetch user team memberships:', membershipError);
+      console.error('[/api/teams] Failed to fetch user team memberships:', membershipError);
       return NextResponse.json(
         { error: 'Failed to fetch team memberships' },
         { status: 500 }
@@ -53,7 +59,10 @@ export async function GET(request: NextRequest) {
     // If user has no team memberships, return empty array
     const userTeamIds = (userMemberships ?? []).map(m => m.team_id);
     
+    console.log(`[/api/teams] User ${user.userId} has ${userTeamIds.length} team memberships: ${userTeamIds.join(', ')}`);
+    
     if (userTeamIds.length === 0) {
+      console.log(`[/api/teams] Returning empty teams for user ${user.userId}`);
       return NextResponse.json({
         teams: [],
       });
@@ -80,13 +89,15 @@ export async function GET(request: NextRequest) {
       .order('name', { ascending: true });
 
     if (error) {
-      console.error('Failed to fetch teams:', error);
+      console.error('[/api/teams] Failed to fetch teams:', error);
 
       return NextResponse.json(
         { error: 'Failed to fetch teams' },
         { status: 500 }
       );
     }
+
+    console.log(`[/api/teams] Fetched ${teams?.length ?? 0} teams for user ${user.userId}`);
 
     const formattedTeams = (teams ?? []).map((team) => ({
       id: team.id,
@@ -103,7 +114,7 @@ export async function GET(request: NextRequest) {
       teams: formattedTeams,
     });
   } catch (err) {
-    console.error('Teams GET error:', err);
+    console.error('[/api/teams] Teams GET error:', err);
 
     return NextResponse.json(
       { error: 'Internal server error' },

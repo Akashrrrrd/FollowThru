@@ -1,112 +1,71 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { createServerClient } from '@/lib/supabase-server';
-import { getUserFromRequest } from '@/lib/supabase-server';
+import { createServerClient, getUserFromRequest } from '@/lib/supabase-server';
+import { OAuthManager } from '@/lib/integrations/oauth-manager';
+import {
+  OAUTH_COOKIE,
+  OAUTH_COOKIE_PATH,
+  PROVIDER_LABELS,
+  errorMessage,
+  exchangeCodeForToken,
+  getBaseUrl,
+  getProviderCredentials,
+  getRedirectUri,
+  isProvider,
+} from '@/lib/integrations/providers';
+
+export const dynamic = 'force-dynamic';
 
 export async function GET(request: NextRequest) {
+  const origin = request.nextUrl.origin;
+
+  const finish = (query: string) => {
+    const res = NextResponse.redirect(new URL(`/integrations?${query}`, getBaseUrl(origin)));
+    res.cookies.set(OAUTH_COOKIE, '', { path: OAUTH_COOKIE_PATH, maxAge: 0 }); // one-time use
+    return res;
+  };
+  const fail = (message: string) => finish(`error=${encodeURIComponent(message.slice(0, 200))}`);
+
   try {
-    const userResult = await getUserFromRequest(request);
-    if (!userResult) {
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+    const user = await getUserFromRequest(request);
+    if (!user) return fail('Your session expired. Please sign in and try again.');
+
+    // Provider + nonce were stored by /connect (the redirect URI itself carries no provider)
+    const cookie = request.cookies.get(OAUTH_COOKIE)?.value ?? '';
+    const dot = cookie.indexOf('.');
+    const provider = dot > 0 ? cookie.slice(0, dot) : '';
+    const nonce = dot > 0 ? cookie.slice(dot + 1) : '';
+    if (!isProvider(provider) || !nonce) {
+      return fail('The connection request expired. Please try connecting again.');
     }
 
-    const searchParams = request.nextUrl.searchParams;
-    const provider = searchParams.get('provider');
-    const code = searchParams.get('code');
-    const error = searchParams.get('error');
+    const params = request.nextUrl.searchParams;
+    const label = PROVIDER_LABELS[provider];
 
-    if (error) {
-      return NextResponse.redirect(
-        new URL(
-          `/integrations?error=${encodeURIComponent(
-            `${provider} OAuth failed: ${error}`,
-          )}`,
-          request.url,
-        ),
-      );
+    const providerError = params.get('error');
+    if (providerError) {
+      return fail(`${label} authorization was not completed: ${params.get('error_description') || providerError}`);
     }
 
-    if (!provider || !code) {
-      return NextResponse.redirect(
-        new URL('/integrations?error=Missing provider or code', request.url),
-      );
+    // CSRF check. ClickUp doesn't reliably echo `state`; the cookie still binds the flow to this browser.
+    const state = params.get('state');
+    if (state ? state !== nonce : provider !== 'clickup') {
+      return fail('Invalid OAuth state. Please try connecting again.');
     }
 
-    const supabase = createServerClient();
+    const code = params.get('code');
+    if (!code) return fail(`${label} did not return an authorization code.`);
 
-    // Exchange code for access token (provider-specific)
-    let accessToken: string | null = null;
-    let refreshToken: string | null = null;
-    let expiresAt: Date | null = null;
-    let userEmail: string | null = null;
+    const creds = getProviderCredentials(provider);
+    if (!creds) return fail(`${label} isn't configured on the server.`);
 
-    if (provider === 'jira') {
-      // Jira OAuth token exchange
-      const tokenRes = await fetch('https://auth.atlassian.com/oauth/token', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          grant_type: 'authorization_code',
-          client_id: process.env.JIRA_CLIENT_ID,
-          client_secret: process.env.JIRA_CLIENT_SECRET,
-          code,
-          redirect_uri: `${process.env.NEXTAUTH_URL || 'http://localhost:3000'}/api/integrations/oauth/callback?provider=jira`,
-        }),
-      });
+    const token = await exchangeCodeForToken(provider, code, getRedirectUri(origin), creds);
+    if (!token.accessToken) throw new Error(`${label} did not return an access token.`);
 
-      if (!tokenRes.ok) throw new Error('Jira token exchange failed');
+    await new OAuthManager(createServerClient()).saveCredentials(user.userId, provider, token);
 
-      const tokenData = await tokenRes.json();
-      accessToken = tokenData.access_token;
-      refreshToken = tokenData.refresh_token;
-
-      if (tokenData.expires_in) {
-        expiresAt = new Date(Date.now() + tokenData.expires_in * 1000);
-      }
-
-      // Get user info from Jira
-      const userRes = await fetch('https://api.atlassian.com/me', {
-        headers: { Authorization: `Bearer ${accessToken}` },
-      });
-
-      if (userRes.ok) {
-        const userData = await userRes.json();
-        userEmail = userData.email;
-      }
-    }
-
-    // Save integration credentials
-    if (accessToken) {
-      const { error: saveError } = await supabase.from('integration_clients').insert({
-        user_id: userResult.userId,
-        provider,
-        client_id: process.env[`${provider.toUpperCase()}_CLIENT_ID`] || '',
-        client_secret: process.env[`${provider.toUpperCase()}_CLIENT_SECRET`] || '',
-        access_token: accessToken,
-        refresh_token: refreshToken,
-        expires_at: expiresAt,
-        connected_at: new Date(),
-      });
-
-      if (saveError) throw saveError;
-
-      return NextResponse.redirect(
-        new URL(
-          `/integrations?success=${provider}`,
-          request.url,
-        ),
-      );
-    }
-
-    throw new Error('Failed to obtain access token');
+    return finish(`success=${provider}`);
   } catch (error) {
     console.error('OAuth callback error:', error);
-    return NextResponse.redirect(
-      new URL(
-        `/integrations?error=${encodeURIComponent(
-          error instanceof Error ? error.message : 'OAuth callback failed',
-        )}`,
-        request.url,
-      ),
-    );
+    return fail(errorMessage(error, 'OAuth callback failed'));
   }
 }

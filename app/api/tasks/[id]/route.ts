@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 
 import { createServerClient, getUserFromRequest } from '@/lib/supabase-server';
+import { getUserOrganizationContext } from '@/lib/organization-context';
 
 import { isValidTransition } from '@/lib/lifecycle';
 
@@ -38,11 +39,13 @@ export async function PATCH(
 
     }
 
+    console.log('[PATCH] Task update for user:', user.userId);
+
     const { id } = params;
 
     const body = await req.json();
 
-    const { status, description, owner, due_date } = body as {
+    const { status, description, owner, due_date, assigned_to_user_id, team_id } = body as {
 
       status?: string;
 
@@ -52,19 +55,44 @@ export async function PATCH(
 
       due_date?: string | null;
 
+      assigned_to_user_id?: string | null;
+
+      team_id?: string | null;
+
     };
 
     const supabase = createServerClient();
 
-    // Verify ownership
+    // Get user's organization context (for org validation)
+    const orgContext = await getUserOrganizationContext(supabase, user.userId);
+    if (!orgContext) {
+      return NextResponse.json(
+        { error: 'User has no organization membership' },
+        { status: 403 },
+      );
+    }
+
+    // Verify task ownership and org context
     const { data: existing, error: checkError } = await supabase
       .from('tasks')
-      .select('id, status, description, owner, due_date, source')
+      .select('id, status, description, owner, due_date, organization_id, assigned_to_user_id, team_id')
       .eq('id', id)
       .eq('user_id', user.userId)
+      .eq('organization_id', orgContext.organizationId)
       .maybeSingle();
 
     if (checkError || !existing) {
+      console.error('[PATCH] Task lookup failed:', { id, userId: user.userId, checkError, found: !!existing });
+      
+      // Check if task exists with different user_id
+      const { data: otherUserTask } = await supabase
+        .from('tasks')
+        .select('user_id')
+        .eq('id', id)
+        .maybeSingle();
+      
+      console.error('[PATCH] Task exists with different user?', otherUserTask?.user_id);
+      
       return NextResponse.json(
         { error: 'Task not found.' },
         { status: 404 },
@@ -178,6 +206,85 @@ export async function PATCH(
 
     }
 
+    // Handle task assignment validation
+    if (assigned_to_user_id !== undefined) {
+      // If assigning to a user, validate they're in the same organization
+      if (assigned_to_user_id !== null) {
+        // Check if assigned_to_user is in same organization
+        const { data: assignedUserOrg, error: assignedUserError } = await supabase
+          .from('organization_members')
+          .select('organization_id')
+          .eq('user_id', assigned_to_user_id)
+          .eq('organization_id', orgContext.organizationId)
+          .maybeSingle();
+
+        if (assignedUserError || !assignedUserOrg) {
+          return NextResponse.json(
+            { error: 'Cannot assign task to user from different organization.' },
+            { status: 400 },
+          );
+        }
+
+        // If task has a team, validate user is in that team
+        const finalTeamId = team_id !== undefined ? team_id : existing.team_id;
+        if (finalTeamId) {
+          const { data: teamMembership, error: membershipError } = await supabase
+            .from('team_members')
+            .select('id')
+            .eq('team_id', finalTeamId)
+            .eq('user_id', assigned_to_user_id)
+            .maybeSingle();
+
+          if (membershipError || !teamMembership) {
+            return NextResponse.json(
+              { error: 'Cannot assign task to user who is not a member of the task\'s team.' },
+              { status: 400 },
+            );
+          }
+        }
+      }
+      updates.assigned_to_user_id = assigned_to_user_id;
+    }
+
+    // Handle team assignment validation
+    if (team_id !== undefined) {
+      // If setting a team, validate it exists and belongs to same org
+      if (team_id !== null) {
+        const { data: teamData, error: teamError } = await supabase
+          .from('teams')
+          .select('organization_id')
+          .eq('id', team_id)
+          .eq('organization_id', orgContext.organizationId)
+          .maybeSingle();
+
+        if (teamError || !teamData) {
+          return NextResponse.json(
+            { error: 'Team not found or belongs to different organization.' },
+            { status: 400 },
+          );
+        }
+
+        // If task already has an assigned user, validate they're in the new team
+        const finalAssignedUserId = assigned_to_user_id !== undefined ? assigned_to_user_id : existing.assigned_to_user_id;
+        if (finalAssignedUserId) {
+          const { data: teamMembership, error: membershipError } = await supabase
+            .from('team_members')
+            .select('id')
+            .eq('team_id', team_id)
+            .eq('user_id', finalAssignedUserId)
+            .maybeSingle();
+
+          if (membershipError || !teamMembership) {
+            return NextResponse.json(
+              { error: 'Cannot change team: current assignee is not a member of the new team.' },
+              { status: 400 },
+            );
+          }
+        }
+      }
+      updates.team_id = team_id;
+    }
+
     if (Object.keys(updates).length === 0) {
 
       return NextResponse.json(
@@ -200,11 +307,12 @@ export async function PATCH(
 
       .eq('user_id', user.userId)
 
-      .select()
+      .select('id, description, status, owner, due_date, meeting_id, created_at, updated_at, completed_at')
 
       .single();
 
     if (error || !task) {
+      console.error('[PATCH] Update failed:', { error, taskData: task, updates });
 
       return NextResponse.json(
 
@@ -215,6 +323,8 @@ export async function PATCH(
       );
 
     }
+    
+    console.log('[PATCH] Task updated successfully:', { id, status: task.status, updates });
 
     // Auto-create completion notification if status changed to 'completed'
     let completionNotificationId: string | null = null;
@@ -229,18 +339,19 @@ export async function PATCH(
     }
 
     // Trigger reverse sync if task has external source (e.g., jira:KEY-123)
-    if (task.source && Object.keys(updates).length > 0) {
-      try {
-        const [provider] = task.source.split(':');
-        if (provider && ['jira', 'asana', 'monday', 'clickup'].includes(provider)) {
-          const syncService = new BidirectionalSyncService(supabase);
-          await syncService.syncTaskToProvider(user.userId, provider, task);
-        }
-      } catch (err) {
-        console.error('Error syncing task to provider:', err);
-        // Don't fail the task update if sync fails
-      }
-    }
+    // Note: source column doesn't exist in tasks table, so skip this for now
+    // if (task.source && Object.keys(updates).length > 0) {
+    //   try {
+    //     const [provider] = task.source.split(':');
+    //     if (provider && ['jira', 'asana', 'monday', 'clickup'].includes(provider)) {
+    //       const syncService = new BidirectionalSyncService(supabase);
+    //       await syncService.syncTaskToProvider(user.userId, provider, task);
+    //     }
+    //   } catch (err) {
+    //     console.error('Error syncing task to provider:', err);
+    //     // Don't fail the task update if sync fails
+    //   }
+    // }
 
     return NextResponse.json({ 
       task,

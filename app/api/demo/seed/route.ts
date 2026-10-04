@@ -18,12 +18,17 @@ export const dynamic = 'force-dynamic';
 export async function POST(req: NextRequest) {
   try {
     const user = await getUserFromRequest(req);
+    console.log('[SEED] getUserFromRequest result:', user);
+    
     if (!user) {
+      console.error('[SEED] No user found - returning 401');
       return NextResponse.json(
         { error: 'You must be signed in to seed demo data.' },
         { status: 401 },
       );
     }
+
+    console.log('[SEED] Creating demo data for user:', user.userId);
 
     const supabase = createServerClient();
 

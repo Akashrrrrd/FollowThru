@@ -66,6 +66,91 @@ export class NudgeEngine {
   }
 
   /**
+   * Send Slack completion message (public method for completion notifications)
+   * 
+   * Sends a formatted completion notification to user's configured Slack channel.
+   * Does NOT create a nudges record (that's for reminders only).
+   * Throws on error so caller can handle appropriately.
+   */
+  async sendSlackCompletionMessage(userId: string, taskDescription: string, completionDetails: string): Promise<void> {
+    try {
+      // Get user's Slack preferences
+      const { data: prefs, error: prefsError } = await this.supabase
+        .from('user_preferences')
+        .select('slack_channel_id, slack_team_id')
+        .eq('user_id', userId)
+        .single();
+
+      if (prefsError || !prefs?.slack_channel_id) {
+        console.log(`[Slack] Channel not configured for user ${userId}, skipping completion notification`);
+        return;
+      }
+
+      // Get Slack integration token
+      const { data: integration, error: integError } = await this.supabase
+        .from('integration_clients')
+        .select('access_token')
+        .eq('user_id', userId)
+        .eq('provider', 'slack')
+        .single();
+
+      if (integError || !integration?.access_token) {
+        console.warn(`[Slack] Integration not found for user ${userId}`);
+        return;
+      }
+
+      const response = await fetch('https://slack.com/api/chat.postMessage', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${integration.access_token}`,
+        },
+        body: JSON.stringify({
+          channel: prefs.slack_channel_id,
+          blocks: [
+            {
+              type: 'header',
+              text: {
+                type: 'plain_text',
+                text: '✅ Task Completed',
+              },
+            },
+            {
+              type: 'section',
+              text: {
+                type: 'mrkdwn',
+                text: `*${taskDescription}*\n\n${completionDetails}`,
+              },
+            },
+            {
+              type: 'actions',
+              elements: [
+                {
+                  type: 'button',
+                  text: {
+                    type: 'plain_text',
+                    text: 'View in FollowThru',
+                  },
+                  url: `${process.env.NEXT_PUBLIC_APP_URL || process.env.NEXTAUTH_URL}/dashboard`,
+                  style: 'primary',
+                },
+              ],
+            },
+          ],
+        }),
+      });
+
+      const data = await response.json();
+      if (!data.ok) {
+        throw new Error(`Slack API error: ${data.error}`);
+      }
+    } catch (err) {
+      console.error('[Slack] Completion message error:', err);
+      throw err;
+    }
+  }
+
+  /**
    * Send nudge via Slack webhook with proper channel ID
    */
   private async sendSlackNudge(userId: string, message: string): Promise<void> {

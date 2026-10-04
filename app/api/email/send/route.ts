@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getUserFromRequest } from '@/lib/supabase-server';
+import { getEmailProvider } from '@/lib/email-provider';
 
 export async function POST(request: NextRequest) {
   try {
@@ -9,11 +10,11 @@ export async function POST(request: NextRequest) {
     }
 
     const body = await request.json();
-    const { to, subject, html, text } = body;
+    const { to, subject, html } = body;
 
-    if (!to || !subject || (!html && !text)) {
+    if (!to || !subject || !html) {
       return NextResponse.json(
-        { error: 'to, subject, and content (html or text) required' },
+        { error: 'to, subject, and html required' },
         { status: 400 },
       );
     }
@@ -24,23 +25,20 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: 'Invalid email address' }, { status: 400 });
     }
 
-    // In production, this would call SendGrid or similar service
-    // For now, just log and return success (placeholder)
-    console.log(`[EMAIL] To: ${to}, Subject: ${subject}`);
+    // Send email using configured provider (Resend or Console)
+    const emailProvider = getEmailProvider();
+    const sent = await emailProvider.send(to, subject, html);
 
-    // TODO: Implement actual SendGrid integration
-    // const sgMail = require('@sendgrid/mail');
-    // sgMail.setApiKey(process.env.SENDGRID_API_KEY);
-    // await sgMail.send({
-    //   to,
-    //   from: process.env.SENDER_EMAIL,
-    //   subject,
-    //   html: html || text,
-    // });
+    if (!sent) {
+      return NextResponse.json(
+        { error: 'Failed to send email' },
+        { status: 500 },
+      );
+    }
 
     return NextResponse.json({
       success: true,
-      message: 'Email queued for sending',
+      message: 'Email sent successfully',
     });
   } catch (error) {
     console.error('Send email error:', error);

@@ -1,7 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server';
 
 import { createServerClient, getUserFromRequest } from '@/lib/supabase-server';
-
+import { getUserOrganizationContext } from '@/lib/organization-context';
+import { getUserTeams } from '@/lib/team-authorization';
 import { updateOverdueTasks } from '@/lib/overdue';
 
 export const dynamic = 'force-dynamic';
@@ -24,18 +25,40 @@ export async function GET(req: NextRequest) {
 
     }
 
+    const supabase = createServerClient();
+    
+    // Phase 1: Get user's organization context
+    const orgContext = await getUserOrganizationContext(supabase, user.userId);
+    if (!orgContext) {
+      return NextResponse.json(
+        { error: 'User has no organization membership' },
+        { status: 403 },
+      );
+    }
+
+    // Phase 2: Get user's teams
+    const userTeams = await getUserTeams(supabase, user.userId, orgContext.organizationId);
+    const teamIds = userTeams.map((t) => t.teamId);
+
     await updateOverdueTasks(user.userId);
 
-    const supabase = createServerClient();
-
-    const { data: meetings, error } = await supabase
+    // Query meetings: RLS will filter by organization_members membership
+    // Phase 2: Also filter by teams user belongs to
+    let query = supabase
 
       .from('meetings')
 
       .select('*')
 
       .eq('user_id', user.userId)
+      .eq('organization_id', orgContext.organizationId);
+    
+    // If user is in teams, also show meetings from those teams
+    if (teamIds.length > 0) {
+      query = query.or(`team_id.in.(${teamIds.join(',')})`);
+    }
 
+    const { data: meetings, error } = await query
       .order('created_at', { ascending: false });
 
     if (error) {

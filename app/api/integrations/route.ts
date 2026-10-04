@@ -1,35 +1,41 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { createServerClient } from '@/lib/supabase-server';
-import { getUserFromRequest } from '@/lib/supabase-server';
+import { createServerClient, getUserFromRequest } from '@/lib/supabase-server';
+import { OAuthManager } from '@/lib/integrations/oauth-manager';
+import { errorMessage, isProvider } from '@/lib/integrations/providers';
+
+export const dynamic = 'force-dynamic';
+
+const NO_STORE = { 'Cache-Control': 'no-store' };
 
 export async function GET(request: NextRequest) {
   try {
     const userResult = await getUserFromRequest(request);
     if (!userResult) {
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+      return NextResponse.json({ error: 'Unauthorized', success: false }, { status: 401, headers: NO_STORE });
     }
 
     const supabase = createServerClient();
-
-    // Get all connected integrations for this user
-    const { data: integrations, error } = await supabase
+    const { data, error } = await supabase
       .from('integration_clients')
-      .select('provider, connected_at, expires_at, last_synced')
+      .select('provider, email, connected_at, last_synced') // never return tokens
       .eq('user_id', userResult.userId);
-
     if (error) throw error;
 
-    return NextResponse.json({ 
-      success: true,
-      integrations: integrations || [],
-      user_id: userResult.userId,
-    });
+    // Shape matches what the page reads (camelCase, email included)
+    const integrations = (data ?? []).map((row: any) => ({
+      provider: row.provider,
+      email: row.email ?? undefined,
+      lastSync: row.last_synced ?? undefined,
+      connectedAt: row.connected_at,
+    }));
+
+    return NextResponse.json({ success: true, integrations }, { headers: NO_STORE });
   } catch (error) {
     console.error('Get integrations error:', error);
-    return NextResponse.json({ 
-      error: error instanceof Error ? error.message : 'Failed to fetch integrations',
-      success: false 
-    }, { status: 500 });
+    return NextResponse.json(
+      { error: errorMessage(error, 'Failed to fetch integrations'), success: false },
+      { status: 500, headers: NO_STORE },
+    );
   }
 }
 
@@ -40,30 +46,16 @@ export async function DELETE(request: NextRequest) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     }
 
-    const body = await request.json();
-    const { provider } = body;
-
-    if (!provider) {
-      return NextResponse.json({ error: 'provider required' }, { status: 400 });
+    const body = await request.json().catch(() => ({}));
+    const provider = body?.provider;
+    if (!isProvider(provider)) {
+      return NextResponse.json({ error: 'A valid provider is required' }, { status: 400 });
     }
 
-    const supabase = createServerClient();
-
-    // Delete the integration
-    const { error } = await supabase
-      .from('integration_clients')
-      .delete()
-      .eq('user_id', userResult.userId)
-      .eq('provider', provider);
-
-    if (error) throw error;
-
+    await new OAuthManager(createServerClient()).disconnect(userResult.userId, provider);
     return NextResponse.json({ success: true });
   } catch (error) {
     console.error('Delete integration error:', error);
-    return NextResponse.json(
-      { error: error instanceof Error ? error.message : 'Failed to delete integration' },
-      { status: 500 },
-    );
+    return NextResponse.json({ error: errorMessage(error, 'Failed to delete integration') }, { status: 500 });
   }
 }

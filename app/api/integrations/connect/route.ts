@@ -1,98 +1,54 @@
+import { randomBytes } from 'crypto';
 import { NextRequest, NextResponse } from 'next/server';
+import { getUserFromRequest } from '@/lib/supabase-server';
+import {
+  OAUTH_COOKIE,
+  OAUTH_COOKIE_PATH,
+  PROVIDER_LABELS,
+  buildAuthorizeUrl,
+  getBaseUrl,
+  getProviderCredentials,
+  getRedirectUri,
+  isProvider,
+} from '@/lib/integrations/providers';
+
+export const dynamic = 'force-dynamic';
 
 export async function GET(request: NextRequest) {
+  const origin = request.nextUrl.origin;
+
+  // Always send the user back to the page with a readable message instead of raw JSON.
+  const back = (message: string) =>
+    NextResponse.redirect(new URL(`/integrations?error=${encodeURIComponent(message)}`, getBaseUrl(origin)));
+
   try {
-    const searchParams = request.nextUrl.searchParams;
-    const provider = searchParams.get('provider');
-    const redirectUri = searchParams.get('redirect_uri');
+    const user = await getUserFromRequest(request);
+    if (!user) return back('Your session expired. Please sign in again.');
 
-    if (!provider || !redirectUri) {
-      return NextResponse.json(
-        { error: 'Missing provider or redirect_uri' },
-        { status: 400 },
-      );
+    const provider = request.nextUrl.searchParams.get('provider');
+    if (!isProvider(provider)) return back('Unknown integration provider.');
+
+    const creds = getProviderCredentials(provider);
+    if (!creds) {
+      const key = provider.toUpperCase();
+      return back(`${PROVIDER_LABELS[provider]} isn't configured. Set ${key}_CLIENT_ID and ${key}_CLIENT_SECRET.`);
     }
 
-    // Validate provider
-    const validProviders = ['jira', 'asana', 'monday', 'clickup', 'slack', 'teams'];
-    if (!validProviders.includes(provider)) {
-      return NextResponse.json(
-        { error: 'Invalid provider' },
-        { status: 400 },
-      );
-    }
+    const nonce = randomBytes(24).toString('hex');
+    const authUrl = buildAuthorizeUrl(provider, creds.clientId, getRedirectUri(origin), nonce);
 
-    let authUrl = '';
-    const clientId = process.env[`${provider.toUpperCase()}_CLIENT_ID`];
-    const scope = process.env[`${provider.toUpperCase()}_SCOPE`] || 'read:jira-work write:jira-work manage:jira-project manage:jira-configuration';
-
-    switch (provider) {
-      case 'jira':
-        if (!clientId) {
-          return NextResponse.json(
-            { error: 'Jira client ID not configured' },
-            { status: 500 },
-          );
-        }
-        authUrl = `https://auth.atlassian.com/authorize?` +
-          `client_id=${encodeURIComponent(clientId)}&` +
-          `response_type=code&` +
-          `redirect_uri=${encodeURIComponent(redirectUri)}&` +
-          `scope=${encodeURIComponent(scope)}&` +
-          `state=${Math.random().toString(36).substring(7)}`;
-        break;
-
-      case 'asana':
-        if (!clientId) {
-          return NextResponse.json(
-            { error: 'Asana client ID not configured' },
-            { status: 500 },
-          );
-        }
-        authUrl = `https://app.asana.com/-/oauth_authorize?` +
-          `client_id=${encodeURIComponent(clientId)}&` +
-          `redirect_uri=${encodeURIComponent(redirectUri)}&` +
-          `response_type=code&` +
-          `state=${Math.random().toString(36).substring(7)}`;
-        break;
-
-      case 'monday':
-        if (!clientId) {
-          return NextResponse.json(
-            { error: 'Monday client ID not configured' },
-            { status: 500 },
-          );
-        }
-        authUrl = `https://auth.monday.com/oauth2/authorize?` +
-          `client_id=${encodeURIComponent(clientId)}&` +
-          `redirect_uri=${encodeURIComponent(redirectUri)}&` +
-          `response_type=code`;
-        break;
-
-      case 'clickup':
-        if (!clientId) {
-          return NextResponse.json(
-            { error: 'ClickUp client ID not configured' },
-            { status: 500 },
-          );
-        }
-        authUrl = `https://app.clickup.com/api?client_id=${encodeURIComponent(clientId)}&` +
-          `redirect_uri=${encodeURIComponent(redirectUri)}`;
-        break;
-
-      default:
-        return NextResponse.json(
-          { error: 'OAuth not yet implemented for this provider' },
-          { status: 501 },
-        );
-    }
-
-    return NextResponse.redirect(new URL(authUrl));
+    const response = NextResponse.redirect(authUrl);
+    // Provider + CSRF nonce. Lax cookies are sent on the top-level redirect back from the provider.
+    response.cookies.set(OAUTH_COOKIE, `${provider}.${nonce}`, {
+      httpOnly: true,
+      secure: process.env.NODE_ENV === 'production',
+      sameSite: 'lax',
+      path: OAUTH_COOKIE_PATH,
+      maxAge: 600,
+    });
+    return response;
   } catch (error) {
     console.error('Connect error:', error);
-    return NextResponse.json(
-      { error: 'Failed to initiate OAuth' },
-      { status: 500 },
-    );
+    return back('Failed to start the connection. Please try again.');
   }
 }

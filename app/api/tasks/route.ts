@@ -1,7 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server';
 
 import { createServerClient, getUserFromRequest } from '@/lib/supabase-server';
-
+import { getUserOrganizationContext } from '@/lib/organization-context';
+import { getUserTeams } from '@/lib/team-authorization';
 import { updateOverdueTasks } from '@/lib/overdue';
 
 export const dynamic = 'force-dynamic';
@@ -24,9 +25,22 @@ export async function GET(req: NextRequest) {
 
     }
 
-    await updateOverdueTasks(user.userId);
-
     const supabase = createServerClient();
+    
+    // Phase 1: Get user's organization context
+    const orgContext = await getUserOrganizationContext(supabase, user.userId);
+    if (!orgContext) {
+      return NextResponse.json(
+        { error: 'User has no organization membership' },
+        { status: 403 },
+      );
+    }
+
+    // Phase 2: Get user's teams
+    const userTeams = await getUserTeams(supabase, user.userId, orgContext.organizationId);
+    const teamIds = userTeams.map((t) => t.teamId);
+
+    await updateOverdueTasks(user.userId);
 
     const { searchParams } = new URL(req.url);
 
@@ -44,9 +58,19 @@ export async function GET(req: NextRequest) {
 
       .select('*')
 
-      .eq('user_id', user.userId)
+      .eq('organization_id', orgContext.organizationId);
+    
+    // Phase 2: Filter to tasks created by user or assigned to user or in user's teams
+    if (teamIds.length > 0) {
+      query = query.or(
+        `user_id.eq.${user.userId},assigned_to_user_id.eq.${user.userId},team_id.in.(${teamIds.join(',')})`
+      );
+    } else {
+      // If not in any teams, only show own tasks
+      query = query.or(`user_id.eq.${user.userId},assigned_to_user_id.eq.${user.userId}`);
+    }
 
-      .order('due_date', { ascending: true, nullsFirst: false });
+      query = query.order('due_date', { ascending: true, nullsFirst: false });
 
     if (status && status !== 'all') {
 
@@ -152,17 +176,26 @@ export async function POST(req: NextRequest) {
 
     const supabase = createServerClient();
 
-    // Verify the meeting belongs to this user
+    // Get user's organization (required for org-scoped data)
+    const orgContext = await getUserOrganizationContext(supabase, user.userId);
+    if (!orgContext) {
+      return NextResponse.json(
+        { error: 'User has no organization membership' },
+        { status: 403 },
+      );
+    }
 
+    // Verify the meeting belongs to this user AND their organization
     const { data: meeting, error: meetingError } = await supabase
 
       .from('meetings')
 
-      .select('id')
+      .select('id, organization_id')
 
       .eq('id', meeting_id)
 
       .eq('user_id', user.userId)
+      .eq('organization_id', orgContext.organizationId)
 
       .maybeSingle();
 
@@ -187,6 +220,7 @@ export async function POST(req: NextRequest) {
         meeting_id,
 
         user_id: user.userId,
+        organization_id: orgContext.organizationId,
 
         description: description.trim(),
 

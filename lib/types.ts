@@ -185,3 +185,28 @@ export interface CompletionNotification {
   openedAt?: string;
   createdAt: string;
 }
+
+// Phase 2: Teams & Organizational Hierarchy
+export interface Team {
+  id: string;
+  organization_id: string;
+  name: string;
+  description?: string | null;
+  created_by: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface TeamMember {
+  id: string;
+  team_id: string;
+  user_id: string;
+  role: 'team_lead' | 'member';
+  created_at: string;
+  updated_at: string;
+  user?: {
+    id: string;
+    email?: string;
+    display_name?: string;
+  };
+}

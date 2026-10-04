@@ -55,18 +55,14 @@ class ResendEmailProvider implements EmailProvider {
 }
 
 export function getEmailProvider(): EmailProvider {
-  const provider = process.env.EMAIL_PROVIDER || 'console';
-  const apiKey = process.env.EMAIL_API_KEY;
+  const apiKey = process.env.RESEND_API_KEY;
 
-  if (provider === 'resend') {
-    if (!apiKey) {
-      console.warn('[EMAIL] Resend provider configured but EMAIL_API_KEY not set. Falling back to console.');
-      return new ConsoleEmailProvider();
-    }
+  if (apiKey) {
     return new ResendEmailProvider(apiKey);
   }
 
-  // Default to console for development
+  // Fall back to console for development if no API key
+  console.warn('[EMAIL] RESEND_API_KEY not set. Using console provider.');
   return new ConsoleEmailProvider();
 }
 

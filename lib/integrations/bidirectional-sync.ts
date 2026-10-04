@@ -1,340 +1,218 @@
+import { OAuthManager, type IntegrationRow } from './oauth-manager';
+import { CLOCK_SKEW_MS, mapJiraStatus, normalizeDueDate } from './sync-engine';
+import {
+  MONDAY_API_VERSION,
+  bearer,
+  isSyncProvider,
+  jsonInit,
+  requestJson,
+  type SyncProvider,
+} from './providers';
+
+const CLICKUP_STATUS: Record<string, string> = {
+  open: 'to do',
+  in_progress: 'in progress',
+  blocked: 'blocked',
+  completed: 'complete',
+};
+
 /**
- * Bidirectional sync service
- * Syncs FollowThru commitments back to Jira, Asana, Monday, ClickUp
- * Handles token refresh and conflict resolution
+ * Pushes FollowThru task changes back to Jira / Asana / Monday / ClickUp.
+ * Token refresh lives in OAuthManager.getValidAccessToken().
  */
-
-interface IntegrationCredentials {
-  provider: string;
-  accessToken: string;
-  refreshToken?: string;
-  expiresAt?: Date;
-  clientId?: string;
-  clientSecret?: string;
-}
-
 export class BidirectionalSyncService {
   private supabase: any;
+  private oauth: OAuthManager;
 
   constructor(supabase: any) {
     this.supabase = supabase;
+    this.oauth = new OAuthManager(supabase);
   }
 
   /**
-   * Refresh OAuth token if expired
+   * Push every locally-modified task for one integration. Returns how many were pushed.
+   * A task is "modified" when updated_at is newer than synced_at.
    */
-  async refreshTokenIfNeeded(
-    integrationId: string,
-    provider: string,
-    credentials: IntegrationCredentials,
-  ): Promise<string> {
-    // Check if token is expired
-    if (!credentials.expiresAt || new Date() < credentials.expiresAt) {
-      return credentials.accessToken; // Token still valid
-    }
+  async pushPendingChanges(integration: IntegrationRow, accessToken: string): Promise<number> {
+    if (!isSyncProvider(integration.provider)) return 0;
+    const provider = integration.provider;
 
-    // Token expired, refresh it
-    if (!credentials.refreshToken) {
-      throw new Error(`No refresh token available for ${provider}`);
-    }
-
-    try {
-      let newAccessToken: string;
-      let newExpiresAt: Date;
-
-      if (provider === 'jira') {
-        const result = await this.refreshJiraToken(credentials.refreshToken);
-        newAccessToken = result.accessToken;
-        newExpiresAt = new Date(Date.now() + result.expiresIn * 1000);
-      } else if (provider === 'asana') {
-        const result = await this.refreshAsanaToken(credentials.refreshToken, credentials.clientId, credentials.clientSecret);
-        newAccessToken = result.accessToken;
-        newExpiresAt = new Date(Date.now() + result.expiresIn * 1000);
-      } else if (provider === 'monday') {
-        const result = await this.refreshMondayToken(credentials.refreshToken, credentials.clientId, credentials.clientSecret);
-        newAccessToken = result.accessToken;
-        newExpiresAt = new Date(Date.now() + result.expiresIn * 1000);
-      } else if (provider === 'clickup') {
-        // ClickUp tokens don't expire, return current token
-        return credentials.accessToken;
-      } else {
-        throw new Error(`Unknown provider: ${provider}`);
-      }
-
-      // Update stored token
-      await this.supabase
-        .from('integration_clients')
-        .update({
-          access_token: newAccessToken,
-          expires_at: newExpiresAt.toISOString(),
-        })
-        .eq('id', integrationId);
-
-      return newAccessToken;
-    } catch (err) {
-      console.error(`Token refresh failed for ${provider}:`, err);
-      throw new Error(`Failed to refresh ${provider} token: ${err instanceof Error ? err.message : 'unknown error'}`);
-    }
-  }
-
-  /**
-   * Sync FollowThru task changes back to external platform
-   */
-  async syncTaskToProvider(
-    userId: string,
-    provider: string,
-    task: any,
-  ): Promise<void> {
-    // Get integration credentials
-    const { data: integration } = await this.supabase
-      .from('integration_clients')
+    const { data: tasks, error } = await this.supabase
+      .from('tasks')
       .select('*')
-      .eq('user_id', userId)
-      .eq('provider', provider)
-      .single();
+      .eq('user_id', integration.user_id)
+      .like('source', `${provider}:%`);
+    if (error) throw error;
 
-    if (!integration || !integration.access_token) {
-      console.log(`No ${provider} integration found for user ${userId}`);
-      return;
-    }
-
-    // Refresh token if needed
-    const accessToken = await this.refreshTokenIfNeeded(integration.id, provider, {
-      provider,
-      accessToken: integration.access_token,
-      refreshToken: integration.refresh_token,
-      expiresAt: integration.expires_at ? new Date(integration.expires_at) : undefined,
-      clientId: integration.client_id,
-      clientSecret: integration.client_secret,
+    const dirty = (tasks ?? []).filter((t: any) => {
+      const updated = Date.parse(t.updated_at);
+      const synced = t.synced_at ? Date.parse(t.synced_at) : 0;
+      return Number.isFinite(updated) && updated > synced + CLOCK_SKEW_MS;
     });
 
-    // Extract external task ID from source field
-    const [, externalTaskId] = task.source?.split(':') || [];
-    if (!externalTaskId) return; // Not an external task
-
-    try {
-      if (provider === 'jira') {
-        await this.updateJiraIssue(accessToken, externalTaskId, task);
-      } else if (provider === 'asana') {
-        await this.updateAsanaTask(accessToken, externalTaskId, task);
-      } else if (provider === 'monday') {
-        await this.updateMondayTask(accessToken, externalTaskId, task);
-      } else if (provider === 'clickup') {
-        await this.updateClickUpTask(accessToken, externalTaskId, task);
+    let pushed = 0;
+    for (const task of dirty) {
+      try {
+        await this.pushTask(provider, accessToken, integration.metadata ?? {}, task);
+        await this.supabase.from('tasks').update({ synced_at: new Date().toISOString() }).eq('id', task.id);
+        pushed++;
+      } catch (err) {
+        // Leave the task dirty so the next cycle retries it.
+        console.error(`[sync] push to ${provider} failed for task ${task.id}:`, err);
       }
+    }
+    return pushed;
+  }
+
+  /** Push a single task (e.g. right after a user edits it). Never throws. */
+  async syncTaskToProvider(userId: string, provider: string, task: any): Promise<void> {
+    try {
+      if (!isSyncProvider(provider)) return;
+      const integration = await this.oauth.getCredentials(userId, provider);
+      if (!integration?.access_token) {
+        console.log(`No ${provider} integration found for user ${userId}`);
+        return;
+      }
+      const token = await this.oauth.getValidAccessToken(integration);
+      await this.pushTask(provider, token, integration.metadata ?? {}, task);
+      await this.supabase.from('tasks').update({ synced_at: new Date().toISOString() }).eq('id', task.id);
     } catch (err) {
-      console.error(`Error syncing task to ${provider}:`, err);
-      // Don't throw, just log - we don't want sync failures to break the main flow
+      console.error(`Error syncing task to ${provider}:`, err); // don't break the caller's flow
     }
   }
 
-  /**
-   * Handle conflict resolution
-   * If task has been modified both in FollowThru and external platform,
-   * apply last-write-wins strategy with audit trail
-   */
-  async resolveConflict(
-    taskId: string,
-    provider: string,
-    followthruVersion: any,
-    externalVersion: any,
-  ): Promise<'followthru' | 'external'> {
-    // Last-write-wins: compare timestamps
-    const followthruTime = new Date(followthruVersion.updated_at || followthruVersion.created_at);
-    const externalTime = new Date(externalVersion.updated_at || externalVersion.created_at);
+  private async pushTask(provider: SyncProvider, token: string, metadata: Record<string, any>, task: any) {
+    const sep = typeof task.source === 'string' ? task.source.indexOf(':') : -1;
+    const ref = sep >= 0 ? task.source.slice(sep + 1) : '';
+    if (!ref) return; // not an external task
 
-    if (followthruTime > externalTime) {
-      // FollowThru version is newer, use it
-      return 'followthru';
-    } else if (externalTime > followthruTime) {
-      // External version is newer, use it
-      return 'external';
-    } else {
-      // Same time, prefer followthru (arbitrary but consistent)
-      return 'followthru';
+    switch (provider) {
+      case 'jira':
+        return this.pushJira(token, metadata, ref, task);
+      case 'asana':
+        return this.pushAsana(token, ref, task);
     }
   }
 
-  /**
-   * Record sync conflict for audit trail
-   */
-  async recordSyncConflict(
-    taskId: string,
-    provider: string,
-    followthruVersion: any,
-    externalVersion: any,
-    resolution: 'followthru' | 'external',
-  ): Promise<void> {
-    // Optional: implement conflict history table for audit
-    console.log(
-      `[SYNC CONFLICT] Task ${taskId} on ${provider}: resolved with ${resolution} version`,
+  // --- Jira: fields via PUT, status via transitions ---
+  private async pushJira(token: string, metadata: Record<string, any>, issueKey: string, task: any) {
+    const cloudId = metadata.cloudId;
+    if (!cloudId) throw new Error('Missing Jira cloudId. Reconnect Jira.');
+
+    const base = `https://api.atlassian.com/ex/jira/${cloudId}/rest/api/3/issue/${encodeURIComponent(issueKey)}`;
+    const headers = { ...bearer(token), 'Content-Type': 'application/json' };
+
+    const fields: Record<string, unknown> = { duedate: normalizeDueDate(task.due_date) };
+    if (task.description) fields.summary = task.description;
+    await requestJson(base, { method: 'PUT', headers, body: JSON.stringify({ fields }) }, 'Jira update');
+
+    // Status can't be set through the edit endpoint; it needs a workflow transition.
+    const current = await requestJson<any>(`${base}?fields=status`, { headers }, 'Jira status lookup');
+    if (mapJiraStatus(current?.fields?.status) === task.status) return;
+
+    const { transitions = [] } = await requestJson<any>(`${base}/transitions`, { headers }, 'Jira transitions');
+    const match = transitions.find((t: any) => {
+      const category = t.to?.statusCategory?.key;
+      const name = String(t.to?.name || '').toLowerCase();
+      switch (task.status) {
+        case 'completed':
+          return category === 'done';
+        case 'in_progress':
+          return category === 'indeterminate' && name !== 'blocked';
+        case 'blocked':
+          return name === 'blocked';
+        default:
+          return category === 'new';
+      }
+    });
+    if (match) {
+      await requestJson(
+        `${base}/transitions`,
+        { method: 'POST', headers, body: JSON.stringify({ transition: { id: match.id } }) },
+        'Jira transition',
+      );
+    }
+  }
+
+  // --- Asana: body must be wrapped in { data } ---
+  private async pushAsana(token: string, gid: string, task: any) {
+    const data: Record<string, unknown> = {
+      due_on: normalizeDueDate(task.due_date),
+      completed: task.status === 'completed',
+    };
+    if (task.description) data.name = task.description;
+
+    await requestJson(
+      `https://app.asana.com/api/1.0/tasks/${encodeURIComponent(gid)}`,
+      {
+        method: 'PUT',
+        headers: { ...bearer(token), 'Content-Type': 'application/json' },
+        body: JSON.stringify({ data }),
+      },
+      'Asana update',
     );
   }
 
-  // --- Private token refresh methods ---
+  // --- Monday: only the item name is pushed (other columns need board-specific column ids) ---
+  private async pushMonday(token: string, ref: string, task: any) {
+    const [boardId, itemId] = ref.split(':');
+    if (!boardId || !itemId) throw new Error(`Invalid Monday reference "${ref}"`);
+    if (!task.description) return;
 
-  private async refreshJiraToken(refreshToken: string): Promise<{ accessToken: string; expiresIn: number }> {
-    const response = await fetch('https://auth.atlassian.com/oauth/token', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        grant_type: 'refresh_token',
-        refresh_token: refreshToken,
-        client_id: process.env.JIRA_CLIENT_ID,
-        client_secret: process.env.JIRA_CLIENT_SECRET,
-      }),
-    });
-
-    if (!response.ok) throw new Error('Jira token refresh failed');
-
-    const data = await response.json();
-    return {
-      accessToken: data.access_token,
-      expiresIn: data.expires_in || 3600,
-    };
+    const mutation = `mutation ($board: ID!, $item: ID!, $value: String!) {
+      change_simple_column_value(board_id: $board, item_id: $item, column_id: "name", value: $value) { id }
+    }`;
+    const res = await requestJson<any>(
+      'https://api.monday.com/v2',
+      jsonInit(
+        { query: mutation, variables: { board: boardId, item: itemId, value: task.description } },
+        { Authorization: token, 'API-Version': MONDAY_API_VERSION },
+      ),
+      'Monday update',
+    );
+    if (res?.errors?.length) throw new Error(`Monday update failed: ${res.errors[0].message}`);
   }
 
-  private async refreshAsanaToken(
-    refreshToken: string,
-    clientId?: string,
-    clientSecret?: string,
-  ): Promise<{ accessToken: string; expiresIn: number }> {
-    const response = await fetch('https://app.asana.com/-/oauth_token', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-      body: new URLSearchParams({
-        grant_type: 'refresh_token',
-        refresh_token: refreshToken,
-        client_id: clientId || process.env.ASANA_CLIENT_ID || '',
-        client_secret: clientSecret || process.env.ASANA_CLIENT_SECRET || '',
-      }).toString(),
-    });
+  // --- ClickUp: status is sent separately because custom list statuses may not match ---
+  private async pushClickUp(token: string, taskId: string, task: any) {
+    const url = `https://api.clickup.com/api/v2/task/${encodeURIComponent(taskId)}`;
+    const headers = { Authorization: token, 'Content-Type': 'application/json' };
 
-    if (!response.ok) throw new Error('Asana token refresh failed');
-
-    const data = await response.json();
-    return {
-      accessToken: data.access_token,
-      expiresIn: data.expires_in || 3600,
-    };
-  }
-
-  private async refreshMondayToken(
-    refreshToken: string,
-    clientId?: string,
-    clientSecret?: string,
-  ): Promise<{ accessToken: string; expiresIn: number }> {
-    const response = await fetch('https://auth.monday.com/oauth/token', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        grant_type: 'refresh_token',
-        refresh_token: refreshToken,
-        client_id: clientId || process.env.MONDAY_CLIENT_ID,
-        client_secret: clientSecret || process.env.MONDAY_CLIENT_SECRET,
-      }),
-    });
-
-    if (!response.ok) throw new Error('Monday token refresh failed');
-
-    const data = await response.json();
-    return {
-      accessToken: data.access_token,
-      expiresIn: data.expires_in || 3600,
-    };
-  }
-
-  // --- Private update methods ---
-
-  private async updateJiraIssue(accessToken: string, issueKey: string, task: any): Promise<void> {
-    const fields: Record<string, any> = {};
-
-    if (task.description) fields.summary = task.description;
-    if (task.due_date) fields.duedate = new Date(task.due_date).toISOString().split('T')[0];
-
-    const statusMap: Record<string, string> = {
-      open: 'To Do',
-      in_progress: 'In Progress',
-      blocked: 'Blocked',
-      completed: 'Done',
-    };
-
-    if (task.status && statusMap[task.status]) {
-      fields.status = { name: statusMap[task.status] };
-    }
-
-    await fetch(`https://api.atlassian.com/rest/api/3/issues/${issueKey}`, {
-      method: 'PUT',
-      headers: {
-        Authorization: `Bearer ${accessToken}`,
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({ fields }),
-    });
-  }
-
-  private async updateAsanaTask(accessToken: string, taskGid: string, task: any): Promise<void> {
-    const data: Record<string, any> = {};
-
+    const due = normalizeDueDate(task.due_date);
+    const data: Record<string, unknown> = { due_date: due ? new Date(due).getTime() : null };
     if (task.description) data.name = task.description;
-    if (task.due_date) data.due_on = new Date(task.due_date).toISOString().split('T')[0];
-    if (task.status === 'completed') data.completed = true;
-    if (task.status !== 'completed') data.completed = false;
+    await requestJson(url, { method: 'PUT', headers, body: JSON.stringify(data) }, 'ClickUp update');
 
-    await fetch(`https://app.asana.com/api/1.0/tasks/${taskGid}`, {
-      method: 'PUT',
-      headers: {
-        Authorization: `Bearer ${accessToken}`,
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify(data),
-    });
-  }
-
-  private async updateMondayTask(accessToken: string, taskId: string, task: any): Promise<void> {
-    // Monday.com update via GraphQL
-    const mutation = `
-      mutation {
-        update_item_value(item_id: ${taskId}, column_id: "name", value: "${task.description?.replace(/"/g, '\\"')}") {
-          id
-        }
+    const status = CLICKUP_STATUS[task.status];
+    if (status) {
+      try {
+        await requestJson(url, { method: 'PUT', headers, body: JSON.stringify({ status }) }, 'ClickUp status update');
+      } catch (err) {
+        console.warn('[sync] ClickUp status not applied (list may use custom statuses):', err);
       }
-    `;
-
-    await fetch('https://api.monday.com/graphql', {
-      method: 'POST',
-      headers: {
-        Authorization: accessToken,
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({ query: mutation }),
-    });
+    }
   }
 
-  private async updateClickUpTask(accessToken: string, taskId: string, task: any): Promise<void> {
-    const data: Record<string, any> = {};
+  // --- Conflict helpers (kept for callers that use them) ---
 
-    if (task.description) data.name = task.description;
-    if (task.due_date) data.due_date = new Date(task.due_date).getTime();
+  async resolveConflict(
+    _taskId: string,
+    _provider: string,
+    followthruVersion: any,
+    externalVersion: any,
+  ): Promise<'followthru' | 'external'> {
+    const followthruTime = new Date(followthruVersion.updated_at || followthruVersion.created_at).getTime();
+    const externalTime = new Date(externalVersion.updated_at || externalVersion.created_at).getTime();
+    return externalTime > followthruTime ? 'external' : 'followthru';
+  }
 
-    const statusMap: Record<string, string> = {
-      open: 'to do',
-      in_progress: 'in progress',
-      blocked: 'blocked',
-      completed: 'complete',
-    };
-
-    if (task.status && statusMap[task.status]) {
-      data.status = statusMap[task.status];
-    }
-
-    await fetch(`https://api.clickup.com/api/v2/task/${taskId}`, {
-      method: 'PUT',
-      headers: {
-        Authorization: accessToken,
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify(data),
-    });
+  async recordSyncConflict(
+    taskId: string,
+    provider: string,
+    _followthruVersion: any,
+    _externalVersion: any,
+    resolution: 'followthru' | 'external',
+  ): Promise<void> {
+    console.log(`[SYNC CONFLICT] Task ${taskId} on ${provider}: resolved with ${resolution} version`);
   }
 }

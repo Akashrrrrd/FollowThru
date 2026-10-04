@@ -116,7 +116,7 @@ export async function createCarryoverTask(
 ): Promise<Task | null> {
   const supabase = createServerClient();
 
-  // Fetch the original task
+  // Fetch the original task and the new meeting's organization
   const { data: originalTask, error: fetchError } = await supabase
     .from('tasks')
     .select('*')
@@ -129,12 +129,25 @@ export async function createCarryoverTask(
     return null;
   }
 
+  // Get organization_id from the new meeting
+  const { data: newMeeting, error: meetingError } = await supabase
+    .from('meetings')
+    .select('organization_id')
+    .eq('id', newMeetingId)
+    .single();
+
+  if (meetingError || !newMeeting) {
+    console.error('[CARRYOVER] Failed to fetch new meeting:', meetingError);
+    return null;
+  }
+
   // Create new task in the new meeting that references the original
   const { data: newTask, error: createError } = await supabase
     .from('tasks')
     .insert({
       meeting_id: newMeetingId,
       user_id: userId,
+      organization_id: newMeeting.organization_id,
       description: originalTask.description,
       owner: originalTask.owner,
       owner_user_id: originalTask.owner_user_id,

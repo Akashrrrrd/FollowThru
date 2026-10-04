@@ -84,15 +84,94 @@ export class CompletionNotificationService {
 
   /**
    * Auto-detect or infer responsible person from task metadata
+   * 
+   * Strategy:
+   * 1. Check if already explicitly saved
+   * 2. Try to infer from task owner (if it's an email or matches a user profile)
+   * 3. Try owner_user_id if present
+   * 4. Return null if cannot be inferred
    */
   async inferResponsiblePerson(taskId: string, userId: string): Promise<ResponsiblePerson | null> {
     // First check if one is already saved
     const existing = await this.getResponsiblePerson(taskId);
     if (existing) return existing;
 
-    // Try to infer from task owner or meeting context
-    // For now, return null and let the API caller explicitly set it
-    return null;
+    try {
+      // Fetch task details to extract owner info
+      const { data: task, error: taskError } = await this.supabase
+        .from('tasks')
+        .select('owner, owner_user_id, user_id')
+        .eq('id', taskId)
+        .single();
+
+      if (taskError || !task) {
+        console.warn(`[completion] Could not fetch task ${taskId} for inference:`, taskError);
+        return null;
+      }
+
+      // Strategy 1: If owner_user_id is set, fetch their profile
+      if (task.owner_user_id) {
+        const { data: userProfile, error: profileError } = await this.supabase
+          .from('user_profiles')
+          .select('id, full_name, email')
+          .eq('id', task.owner_user_id)
+          .single();
+
+        if (!profileError && userProfile?.email) {
+          return {
+            id: userProfile.id,
+            name: userProfile.full_name || userProfile.email,
+            email: userProfile.email,
+            isFollowthruMember: true,
+          };
+        }
+      }
+
+      // Strategy 2: If owner looks like an email, try to find matching user
+      if (task.owner && task.owner.includes('@')) {
+        const { data: userProfile, error: profileError } = await this.supabase
+          .from('user_profiles')
+          .select('id, full_name, email')
+          .eq('email', task.owner)
+          .single();
+
+        if (!profileError && userProfile?.email) {
+          return {
+            id: userProfile.id,
+            name: userProfile.full_name || userProfile.email,
+            email: userProfile.email,
+            isFollowthruMember: true,
+          };
+        }
+      }
+
+      // Strategy 3: If owner is a name and creator is a FollowThru member, use creator's email
+      // (assuming task creator wants to be notified of their tasks' completion)
+      const { data: creatorProfile, error: creatorError } = await this.supabase
+        .from('user_profiles')
+        .select('id, email, full_name')
+        .eq('id', task.user_id)
+        .single();
+
+      if (!creatorError && creatorProfile?.email) {
+        // Save this inference for future use
+        await this.saveResponsiblePerson(taskId, creatorProfile.full_name || creatorProfile.email, creatorProfile.email, true, creatorProfile.id).catch((err) => {
+          console.warn(`[completion] Could not save inferred responsible person:`, err);
+        });
+
+        return {
+          id: creatorProfile.id,
+          name: creatorProfile.full_name || creatorProfile.email,
+          email: creatorProfile.email,
+          isFollowthruMember: true,
+        };
+      }
+
+      return null;
+    } catch (err) {
+      console.warn(`[completion] Error inferring responsible person for task ${taskId}:`, err);
+      return null;
+    }
   }
 
   /**
@@ -362,8 +441,167 @@ FollowThru Team
   }
 
   /**
-   * Auto-create completion notification when task is marked complete
+   * Check if a completion notification has already been sent for this task
+   */
+  async hasCompletionNotificationBeenSent(taskId: string): Promise<boolean> {
+    const { data, error } = await this.supabase
+      .from('completion_notifications')
+      .select('id')
+      .eq('task_id', taskId)
+      .eq('status', 'sent')
+      .limit(1)
+      .single();
+
+    return !error && !!data;
+  }
+
+  /**
+   * Auto-create and send completion notification (with Slack support)
+   * 
+   * This is called when a task is completed externally (via sync).
+   * It combines auto-creation with automatic sending (unlike the manual flow).
+   * 
+   * Returns the notification ID if successful, null otherwise.
+   * Includes duplicate prevention: won't send twice for the same task.
+   */
+  async autoCreateAndSendCompletionNotification(
+    taskId: string,
+    userId: string,
+  ): Promise<string | null> {
+    try {
+      // DUPLICATE PREVENTION: Check if notification already sent
+      const alreadySent = await this.hasCompletionNotificationBeenSent(taskId);
+      if (alreadySent) {
+        console.log(`[completion] Notification already sent for task ${taskId}, skipping`);
+        return null;
+      }
+
+      // Get task details
+      const { data: task, error: taskError } = await this.supabase
+        .from('tasks')
+        .select('*')
+        .eq('id', taskId)
+        .single();
+
+      if (taskError || !task) {
+        console.warn(`[completion] Could not fetch task ${taskId}:`, taskError);
+        return null;
+      }
+
+      // Try to get or infer responsible person
+      let responsible = await this.getResponsiblePerson(taskId);
+      if (!responsible) {
+        responsible = await this.inferResponsiblePerson(taskId, userId);
+      }
+
+      if (!responsible) {
+        console.log(`[completion] No responsible person for task ${taskId}, skipping notification`);
+        return null;
+      }
+
+      // Get meeting context for email
+      let meetingContext = 'Commitment from meeting';
+      let sourceQuote = task.source_quote || task.description;
+
+      if (task.meeting_id) {
+        const { data: meeting } = await this.supabase
+          .from('meetings')
+          .select('topic')
+          .eq('id', task.meeting_id)
+          .single();
+
+        if (meeting?.topic) {
+          meetingContext = `From meeting: ${meeting.topic}`;
+        }
+
+        // Try to get evidence with quote
+        const { data: evidence } = await this.supabase
+          .from('commitment_evidence')
+          .select('quote')
+          .eq('task_id', taskId)
+          .order('created_at', { ascending: false })
+          .limit(1)
+          .single();
+
+        if (evidence?.quote) {
+          sourceQuote = evidence.quote;
+        }
+      }
+
+      // Generate email using AI
+      const { subject, body } = await this.generateCompletionEmail(
+        task.description,
+        task.owner || 'Unknown',
+        meetingContext,
+        sourceQuote,
+        responsible.name,
+        new Date().toLocaleDateString('en-US'),
+      );
+
+      // Create draft notification (will be marked as sent after email sent)
+      const notificationId = await this.createDraftNotification(
+        taskId,
+        responsible.email,
+        responsible.name,
+        subject,
+        body,
+      );
+
+      // Try to send email
+      let emailSent = false;
+      try {
+        emailSent = await this.emailProvider.send(responsible.email, subject, body);
+        if (emailSent) {
+          await this.supabase
+            .from('completion_notifications')
+            .update({
+              status: 'sent',
+              sent_at: new Date().toISOString(),
+            })
+            .eq('id', notificationId);
+          console.log(`[completion] Email sent for task ${taskId} to ${responsible.email}`);
+        }
+      } catch (emailErr) {
+        console.warn(`[completion] Email send failed for task ${taskId}:`, emailErr);
+        // Don't fail the whole flow; Slack notification can still be sent
+      }
+
+      // Try to send Slack completion message (if user has Slack configured)
+      try {
+        const completionDetails = `Originally committed as: "${sourceQuote}"\n\nCompleted: ${new Date().toLocaleString()}`;
+        await this.sendSlackCompletionMessage(userId, task.description, completionDetails);
+        console.log(`[completion] Slack message sent for task ${taskId} to user ${userId}`);
+      } catch (slackErr) {
+        console.warn(`[completion] Slack message failed for task ${taskId}:`, slackErr);
+        // Don't fail if Slack is not available
+      }
+
+      return notificationId;
+    } catch (err) {
+      console.error('[completion] Error in autoCreateAndSendCompletionNotification:', err);
+      return null;
+    }
+  }
+
+  /**
+   * Send Slack completion message (via injected NudgeEngine)
+   * This is called after email is sent to also notify on Slack
+   */
+  private async sendSlackCompletionMessage(
+    userId: string,
+    taskDescription: string,
+    completionDetails: string,
+  ): Promise<void> {
+    // Lazy import to avoid circular dependency
+    const { NudgeEngine } = await import('./integrations/nudge-engine');
+    const nudgeEngine = new NudgeEngine(this.supabase);
+    await nudgeEngine.sendSlackCompletionMessage(userId, taskDescription, completionDetails);
+  }
+
+  /**
+   * Auto-create completion notification when task is marked complete (manual flow)
    * This is called from the task update endpoint when status changes to 'completed'
+   * Creates a DRAFT that requires manual send (legacy behavior)
    */
   async autoCreateCompletionNotification(
     taskId: string,
@@ -379,11 +617,14 @@ FollowThru Team
 
       if (!task) return null;
 
-      // Try to get responsible person (if none set, infer from owner or return null)
+      // Try to get or infer responsible person
       let responsible = await this.getResponsiblePerson(taskId);
       if (!responsible) {
-        // TODO: Implement logic to infer from owner or task context
-        // For now, just return null to let the user explicitly add one
+        responsible = await this.inferResponsiblePerson(taskId, userId);
+      }
+
+      if (!responsible) {
+        console.log(`[completion] No responsible person for task ${taskId}, cannot auto-create notification`);
         return null;
       }
 

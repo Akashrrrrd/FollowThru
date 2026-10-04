@@ -1,6 +1,9 @@
 import { NextResponse, NextRequest } from 'next/server';
 import { getUserFromRequest, createServerClient } from '@/lib/supabase-server';
 import { createClient } from '@supabase/supabase-js';
+import { getUserOrganizationContext } from '@/lib/organization-context';
+import { ensureUserInDefaultTeam } from '@/lib/team-migration';
+import { getUserTeamContext } from '@/lib/team-context';
 
 export const dynamic = 'force-dynamic';
 
@@ -13,6 +16,17 @@ export async function GET(request: Request) {
   const supabase = createServerClient();
 
   try {
+    // Phase 2: Ensure user is in default team for their organization
+    const orgContext = await getUserOrganizationContext(supabase, user.userId);
+    if (orgContext) {
+      await ensureUserInDefaultTeam(supabase, user.userId, orgContext.organizationId).catch(
+        (err) => {
+          console.warn('Failed to ensure user in default team:', err);
+          // Non-blocking: don't fail profile fetch if team assignment fails
+        },
+      );
+    }
+
     // Get user metadata using the user's token
     const userClient = createClient(
       process.env.NEXT_PUBLIC_SUPABASE_URL!,
@@ -105,6 +119,17 @@ export async function GET(request: Request) {
         meeting_id: t.meeting_id,
       })) || [];
 
+    // Phase 2: Get team context for user
+    let teamContext = null;
+    if (orgContext) {
+      teamContext = await getUserTeamContext(supabase, user.userId, orgContext.organizationId).catch(
+        (err) => {
+          console.warn('Failed to get team context:', err);
+          return null;
+        },
+      );
+    }
+
     return NextResponse.json({
       profile: profile || null,
       user: {
@@ -112,6 +137,11 @@ export async function GET(request: Request) {
         id: user.userId,
         created_at: userCreatedAt,
       },
+      organization: orgContext ? {
+        id: orgContext.organizationId,
+        role: orgContext.role,
+      } : null,
+      teams: teamContext || null,
       stats: {
         totalTasks,
         doneTasks,

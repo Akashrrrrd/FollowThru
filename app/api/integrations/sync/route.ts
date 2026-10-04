@@ -1,336 +1,181 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createServerClient } from '@/lib/supabase-server';
 import { BidirectionalSyncService } from '@/lib/integrations/bidirectional-sync';
+import { OAuthManager, type IntegrationRow } from '@/lib/integrations/oauth-manager';
+import { SyncEngine } from '@/lib/integrations/sync-engine';
+import { CompletionNotificationService } from '@/lib/completion-notification-service';
+import { SYNC_PROVIDERS, errorMessage, isSyncProvider } from '@/lib/integrations/providers';
+
+export const dynamic = 'force-dynamic';
+export const maxDuration = 60;
 
 /**
- * Cron job that runs every 15 minutes to sync connected integrations
- * Handles both forward sync (external → FollowThru) and reverse sync (FollowThru → external)
- * Triggered by external cron service (Vercel Cron, etc.)
+ * Runs every 15 minutes. For each connected integration:
+ *   1. refresh the token if needed
+ *   2. pull external tasks into FollowThru   (external -> FollowThru)
+ *   3. trigger completion notifications for tasks that just completed
+ *   4. push locally-modified tasks back out  (FollowThru -> external)
+ * 
+ * Error handling strategy:
+ * - Individual integration failures don't stop other integrations
+ * - Individual task completions that fail don't stop the sync
+ * - Completion notification errors are logged but don't block sync
+ * - API failures are caught and logged without exposing tokens
+ * 
+ * Vercel Cron calls GET; external schedulers can use POST. Both need the secret.
  */
-export async function POST(request: NextRequest) {
+async function handle(request: NextRequest) {
+  const secret = process.env.CRON_SECRET;
+  if (!secret) {
+    return NextResponse.json({ error: 'CRON_SECRET is not configured' }, { status: 500 });
+  }
+  if (request.headers.get('authorization') !== `Bearer ${secret}`) {
+    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+  }
+
   try {
-    // Verify cron secret
-    const secret = request.headers.get('authorization');
-    if (secret !== `Bearer ${process.env.CRON_SECRET}`) {
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
-    }
-
     const supabase = createServerClient();
-    const syncService = new BidirectionalSyncService(supabase);
+    const oauth = new OAuthManager(supabase);
+    const engine = new SyncEngine(supabase);
+    const bidirectional = new BidirectionalSyncService(supabase);
+    const completionService = new CompletionNotificationService(supabase);
 
-    // Get all active integrations
-    const { data: integrations, error: fetchError } = await supabase
+    const { data: rows, error: fetchError } = await supabase
       .from('integration_clients')
-      .select('id, user_id, provider, access_token, refresh_token, expires_at, client_id, client_secret')
+      .select('id, user_id, provider, access_token, refresh_token, expires_at, metadata, last_synced, organization_id')
+      .in('provider', [...SYNC_PROVIDERS])
       .not('access_token', 'is', null);
-
     if (fetchError) throw fetchError;
 
-    const results = [];
+    const results: Array<Record<string, unknown>> = [];
 
-    for (const integration of integrations || []) {
+    for (const row of (rows ?? []) as (IntegrationRow & { organization_id?: string})[]) {
+      if (!isSyncProvider(row.provider)) continue;
+      let jobId: string | null = null;
+
       try {
-        // Forward sync: fetch from external platform and import into FollowThru
-        if (integration.provider === 'jira') {
-          await syncJira(supabase, integration.user_id, integration.access_token);
-        } else if (integration.provider === 'asana') {
-          await syncAsana(supabase, integration.user_id, integration.access_token);
-        } else if (integration.provider === 'monday') {
-          await syncMonday(supabase, integration.user_id, integration.access_token);
-        } else if (integration.provider === 'clickup') {
-          await syncClickUp(supabase, integration.user_id, integration.access_token);
+        jobId = await engine.startSync(row.user_id, row.provider, row.organization_id);
+        await engine.updateSyncStatus(jobId, 'running');
+
+        let token: string;
+        try {
+          token = await oauth.getValidAccessToken(row);
+        } catch (tokenErr) {
+          console.error(`[sync] Token refresh failed for ${row.provider}:`, tokenErr);
+          throw new Error(`Failed to refresh token for ${row.provider}`);
         }
 
-        // Reverse sync: push any pending FollowThru changes back to external platform
-        await reverseSync(supabase, syncService, integration.user_id, integration.provider);
+        let external: any[];
+        try {
+          external = await engine.pullFromProvider(row.provider, token, row.metadata ?? {});
+        } catch (pullErr) {
+          console.error(`[sync] Pull failed for ${row.provider}:`, pullErr);
+          throw new Error(`Failed to pull tasks from ${row.provider}`);
+        }
 
-        // Update last_synced timestamp
-        await supabase
-          .from('integration_clients')
-          .update({ last_synced: new Date().toISOString() })
-          .eq('id', integration.id);
+        let syncResult;
+        try {
+          syncResult = await engine.applyExternalTasks(row.user_id, external, row.organization_id);
+        } catch (applyErr) {
+          console.error(`[sync] Apply failed for ${row.provider}:`, applyErr);
+          throw new Error(`Failed to apply tasks for ${row.provider}`);
+        }
+        const pulled = syncResult.changed;
 
-        results.push({ provider: integration.provider, status: 'success' });
+        // PROCESS COMPLETIONS: Trigger notifications for tasks that just completed
+        // Each completion is independently error-handled; failures don't stop sync
+        let completionsProcessed = 0;
+        let completionErrors = 0;
+        for (const completion of syncResult.completions) {
+          try {
+            const notifId = await completionService.autoCreateAndSendCompletionNotification(
+              completion.taskId,
+              completion.userId,
+            );
+            if (notifId) {
+              completionsProcessed++;
+            }
+          } catch (err) {
+            completionErrors++;
+            console.warn(
+              `[sync] Failed to process completion for task ${completion.taskId}:`,
+              err instanceof Error ? err.message : String(err),
+            );
+            // IMPORTANT: Do not re-throw. Continue processing other completions.
+          }
+        }
+
+        let pushed: number;
+        try {
+          pushed = await bidirectional.pushPendingChanges(row, token);
+        } catch (pushErr) {
+          console.error(`[sync] Push failed for ${row.provider}:`, pushErr);
+          // Log but don't fail the sync - local changes will retry next cycle
+          pushed = 0;
+        }
+
+        try {
+          await supabase
+            .from('integration_clients')
+            .update({ last_synced: new Date().toISOString() })
+            .eq('id', row.id);
+        } catch (updateErr) {
+          console.warn(`[sync] Failed to update last_synced for ${row.provider}:`, updateErr);
+          // Don't throw - this won't block the result reporting
+        }
+
+        try {
+          await engine.updateSyncStatus(jobId, 'completed', pulled + pushed);
+        } catch (jobErr) {
+          console.warn(`[sync] Failed to update sync job status:`, jobErr);
+          // Non-critical; don't throw
+        }
+
+        const syncResultData: Record<string, unknown> = {
+          provider: row.provider,
+          status: 'success',
+          pulled,
+          pushed,
+          completions: completionsProcessed,
+        };
+
+        if (completionErrors > 0) {
+          syncResultData.completionErrors = completionErrors;
+        }
+
+        results.push(syncResultData);
       } catch (err) {
-        console.error(`Sync ${integration.provider} error:`, err);
+        const message = errorMessage(err, 'Unknown error');
+        console.error(`[sync] ${row.provider} provider error:`, message);
+        if (jobId) {
+          try {
+            await engine.updateSyncStatus(jobId, 'failed', undefined, message).catch(() => {});
+          } catch (statusErr) {
+            console.warn(`[sync] Could not update failed job status:`, statusErr);
+          }
+        }
         results.push({
-          provider: integration.provider,
+          provider: row.provider,
           status: 'error',
-          error: err instanceof Error ? err.message : 'Unknown error',
+          error: message,
         });
+        // Continue with next provider
       }
     }
 
-    return NextResponse.json({ synced: results.length, results });
+    return NextResponse.json({
+      total: results.length,
+      synced: results.filter((r) => r.status === 'success').length,
+      results,
+    });
   } catch (error) {
-    console.error('Sync error:', error);
+    console.error('[sync] Critical sync error:', error instanceof Error ? error.message : String(error));
     return NextResponse.json(
-      { error: error instanceof Error ? error.message : 'Sync failed' },
+      { error: errorMessage(error, 'Sync failed') },
       { status: 500 },
     );
   }
 }
 
-/**
- * Reverse sync: push FollowThru changes back to external platforms
- */
-async function reverseSync(
-  supabase: any,
-  syncService: BidirectionalSyncService,
-  userId: string,
-  provider: string,
-): Promise<void> {
-  // Get tasks that were synced from this provider and have been modified
-  const { data: tasks } = await supabase
-    .from('tasks')
-    .select('*')
-    .eq('user_id', userId)
-    .like('source', `${provider}:%`)
-    .gt('updated_at', supabase.rpc('get_integration_last_sync', { user_id: userId, provider }));
-
-  if (!tasks || tasks.length === 0) return;
-
-  for (const task of tasks) {
-    await syncService.syncTaskToProvider(userId, provider, task);
-  }
-}
-
-async function syncJira(supabase: any, userId: string, accessToken: string) {
-  // Fetch issues from Jira
-  const res = await fetch('https://api.atlassian.com/rest/api/3/issues/search', {
-    headers: { Authorization: `Bearer ${accessToken}` },
-  });
-
-  if (!res.ok) throw new Error('Jira API error');
-
-  const data = await res.json();
-
-  // Sync each issue as a task
-  for (const issue of data.issues || []) {
-    const source = `jira:${issue.key}`;
-
-    // Check if already exists
-    const { data: existing } = await supabase
-      .from('tasks')
-      .select('id, updated_at')
-      .eq('user_id', userId)
-      .eq('source', source)
-      .single();
-
-    if (!existing) {
-      // Create new task
-      await supabase.from('tasks').insert({
-        user_id: userId,
-        description: issue.fields.summary,
-        owner: issue.fields.assignee?.displayName || 'Unassigned',
-        due_date: issue.fields.duedate,
-        status: mapJiraStatus(issue.fields.status.name),
-        source,
-      });
-    } else {
-      // Update existing task (conflict resolution: last-write-wins)
-      const externalUpdatedAt = new Date(issue.updated);
-      const followthruUpdatedAt = new Date(existing.updated_at);
-
-      if (externalUpdatedAt > followthruUpdatedAt) {
-        // External is newer, update FollowThru
-        await supabase
-          .from('tasks')
-          .update({
-            description: issue.fields.summary,
-            owner: issue.fields.assignee?.displayName || 'Unassigned',
-            due_date: issue.fields.duedate,
-            status: mapJiraStatus(issue.fields.status.name),
-            updated_at: new Date().toISOString(),
-          })
-          .eq('id', existing.id);
-      }
-      // If FollowThru is newer or equal, don't update (let reverse sync handle it)
-    }
-  }
-}
-
-async function syncAsana(supabase: any, userId: string, accessToken: string) {
-  const res = await fetch('https://app.asana.com/api/1.0/tasks?assignee=me', {
-    headers: { Authorization: `Bearer ${accessToken}` },
-  });
-
-  if (!res.ok) throw new Error('Asana API error');
-
-  const data = await res.json();
-
-  for (const task of data.data || []) {
-    const source = `asana:${task.gid}`;
-
-    const { data: existing } = await supabase
-      .from('tasks')
-      .select('id, updated_at')
-      .eq('user_id', userId)
-      .eq('source', source)
-      .single();
-
-    if (!existing) {
-      await supabase.from('tasks').insert({
-        user_id: userId,
-        description: task.name,
-        owner: task.assignee?.name || 'Unassigned',
-        due_date: task.due_on,
-        status: task.completed ? 'completed' : 'open',
-        source,
-      });
-    } else {
-      const externalUpdatedAt = new Date(task.modified_at);
-      const followthruUpdatedAt = new Date(existing.updated_at);
-
-      if (externalUpdatedAt > followthruUpdatedAt) {
-        await supabase
-          .from('tasks')
-          .update({
-            description: task.name,
-            owner: task.assignee?.name || 'Unassigned',
-            due_date: task.due_on,
-            status: task.completed ? 'completed' : 'open',
-            updated_at: new Date().toISOString(),
-          })
-          .eq('id', existing.id);
-      }
-    }
-  }
-}
-
-async function syncMonday(supabase: any, userId: string, accessToken: string) {
-  // Monday.com uses GraphQL
-  const res = await fetch('https://api.monday.com/graphql', {
-    method: 'POST',
-    headers: {
-      Authorization: accessToken,
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify({
-      query: `{
-        me {
-          boards {
-            items {
-              id
-              name
-              state
-              updated_at
-              due_date
-              owner {
-                name
-              }
-            }
-          }
-        }
-      }`,
-    }),
-  });
-
-  if (!res.ok) throw new Error('Monday API error');
-
-  const data = await res.json();
-
-  // Flatten items from all boards
-  const allItems: any[] = [];
-  if (data.data?.me?.boards) {
-    for (const board of data.data.me.boards) {
-      allItems.push(...(board.items || []));
-    }
-  }
-
-  for (const item of allItems) {
-    const source = `monday:${item.id}`;
-
-    const { data: existing } = await supabase
-      .from('tasks')
-      .select('id, updated_at')
-      .eq('user_id', userId)
-      .eq('source', source)
-      .single();
-
-    if (!existing) {
-      await supabase.from('tasks').insert({
-        user_id: userId,
-        description: item.name,
-        owner: item.owner?.name || 'Unassigned',
-        due_date: item.due_date,
-        status: item.state || 'open',
-        source,
-      });
-    } else {
-      const externalUpdatedAt = new Date(item.updated_at);
-      const followthruUpdatedAt = new Date(existing.updated_at);
-
-      if (externalUpdatedAt > followthruUpdatedAt) {
-        await supabase
-          .from('tasks')
-          .update({
-            description: item.name,
-            owner: item.owner?.name || 'Unassigned',
-            due_date: item.due_date,
-            status: item.state || 'open',
-            updated_at: new Date().toISOString(),
-          })
-          .eq('id', existing.id);
-      }
-    }
-  }
-}
-
-async function syncClickUp(supabase: any, userId: string, accessToken: string) {
-  const res = await fetch('https://api.clickup.com/api/v2/task?archived=false', {
-    headers: { Authorization: accessToken },
-  });
-
-  if (!res.ok) throw new Error('ClickUp API error');
-
-  const data = await res.json();
-
-  for (const task of data.tasks || []) {
-    const source = `clickup:${task.id}`;
-
-    const { data: existing } = await supabase
-      .from('tasks')
-      .select('id, updated_at')
-      .eq('user_id', userId)
-      .eq('source', source)
-      .single();
-
-    if (!existing) {
-      await supabase.from('tasks').insert({
-        user_id: userId,
-        description: task.name,
-        owner: task.assignees[0]?.username || 'Unassigned',
-        due_date: task.due_date ? new Date(parseInt(task.due_date)).toISOString() : null,
-        status: task.status.status.toLowerCase(),
-        source,
-      });
-    } else {
-      const externalUpdatedAt = new Date(task.updated_at);
-      const followthruUpdatedAt = new Date(existing.updated_at);
-
-      if (externalUpdatedAt > followthruUpdatedAt) {
-        await supabase
-          .from('tasks')
-          .update({
-            description: task.name,
-            owner: task.assignees[0]?.username || 'Unassigned',
-            due_date: task.due_date ? new Date(parseInt(task.due_date)).toISOString() : null,
-            status: task.status.status.toLowerCase(),
-            updated_at: new Date().toISOString(),
-          })
-          .eq('id', existing.id);
-      }
-    }
-  }
-}
-
-function mapJiraStatus(jiraStatus: string): string {
-  const mapping: Record<string, string> = {
-    'To Do': 'open',
-    'In Progress': 'in_progress',
-    'Done': 'completed',
-    'Blocked': 'blocked',
-  };
-  return mapping[jiraStatus] || 'open';
-}
+export const GET = handle;
+export const POST = handle;

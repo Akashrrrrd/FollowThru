@@ -1,11 +1,15 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createServerClient, getUserFromRequest } from '@/lib/supabase-server';
+import { getUserOrganizationContext } from '@/lib/organization-context';
 import { callGroqForExtraction } from '@/lib/groq';
 import { resolveDateExpression, isDependencyExpression } from '@/lib/date-resolver';
 import { linkCommitmentsToPrevious, saveContinuityEvents } from '@/lib/commitment-linker';
 import { validatePipeline, StageContext, formatPipelineReport } from '@/lib/pipeline-validator';
 import { logRejections } from '@/lib/pipeline-error-handler';
 import { HallucinationDetector } from '@/lib/hallucination-detector';
+import { resolveOwnerToUser } from '@/lib/owner-resolution';
+import { resolveUserToTeam } from '@/lib/team-resolution';
+import { getTeamLeadResolution } from '@/lib/team-lead-resolution';
 import type { ExtractedCommitment } from '@/lib/types';
 
 export const dynamic = 'force-dynamic';
@@ -91,12 +95,22 @@ export async function POST(req: NextRequest) {
 
     const supabase = createServerClient();
 
+    // Get user's organization (required for org-scoped data)
+    const orgContext = await getUserOrganizationContext(supabase, user.userId);
+    if (!orgContext) {
+      return NextResponse.json(
+        { error: 'User has no organization membership' },
+        { status: 403 },
+      );
+    }
+
     const { data: meeting, error: meetingError } = await supabase
       .from('meetings')
       .insert({
         title: title.trim(),
         transcript: trimmedTranscript,
         user_id: user.userId,
+        organization_id: orgContext.organizationId,
       })
       .select()
       .single();
@@ -200,6 +214,7 @@ export async function POST(req: NextRequest) {
           return {
             meeting_id: meeting.id,
             user_id: user.userId,
+            organization_id: orgContext.organizationId,
             description: c.description,
             owner: c.owner,
             owner_user_id: ownerUserId,
@@ -279,6 +294,156 @@ export async function POST(req: NextRequest) {
               `[CONTINUITY] Updated ${linkResult.originalTasksUpdated.length} original commitments: ` +
                 linkResult.originalTasksUpdated.map((t) => `${t.task_id} (${t.event_type})`).join(', '),
             );
+          }
+
+          // Phase 3: Owner → Team → Team Lead Resolution
+          // For each inserted task, resolve: extracted owner name → user ID → team → team lead
+          for (const task of insertedTasks) {
+            try {
+              let assignedToUserId: string | null = null;
+              let assignedTeamId: string | null = task.team_id || null;
+              let assignedTeamLeadId: string | null = null;
+              let needsReview = false;
+              let ambiguityData: Record<string, unknown> | null = null;
+
+              // Step 1: Resolve owner name to user (conservative matching)
+              const ownerResolution = await resolveOwnerToUser(
+                supabase,
+                task.owner,
+                orgContext.organizationId,
+              );
+
+              if (ownerResolution.status === 'resolved' && ownerResolution.userId) {
+                assignedToUserId = ownerResolution.userId;
+                console.log(
+                  `[RESOLUTION] Task ${task.id}: Owner "${task.owner}" → User ${assignedToUserId} (${ownerResolution.reason})`,
+                );
+              } else if (ownerResolution.status === 'ambiguous' && ownerResolution.candidates) {
+                // Owner name matches multiple people; require human review
+                needsReview = true;
+                ambiguityData = {
+                  ambiguity_type: 'owner_ambiguous',
+                  candidates: ownerResolution.candidates.map((c) => ({
+                    userId: c.userId,
+                    displayName: c.displayName,
+                    fullName: c.fullName,
+                    matchConfidence: c.matchConfidence,
+                    matchReason: c.matchReason,
+                  })),
+                  reason: ownerResolution.reason,
+                };
+                console.log(
+                  `[RESOLUTION] Task ${task.id}: Owner "${task.owner}" is ambiguous (${ownerResolution.candidates.length} candidates); flagged for review`,
+                );
+              } else {
+                // Owner unresolved: no matching user in org
+                console.log(
+                  `[RESOLUTION] Task ${task.id}: Owner "${task.owner}" unresolved (${ownerResolution.reason})`,
+                );
+              }
+
+              // Step 2: If owner resolved, determine team
+              if (assignedToUserId && !assignedTeamId) {
+                const teamResolution = await resolveUserToTeam(
+                  supabase,
+                  assignedToUserId,
+                  orgContext.organizationId,
+                  meeting.team_id, // Prefer meeting's team if user is member
+                );
+
+                if (teamResolution.status === 'resolved' && teamResolution.teamId) {
+                  assignedTeamId = teamResolution.teamId;
+                  console.log(
+                    `[RESOLUTION] Task ${task.id}: User ${assignedToUserId} → Team ${assignedTeamId} (${teamResolution.reason})`,
+                  );
+                } else if (teamResolution.status === 'multiple_teams' && teamResolution.candidates) {
+                  // User in multiple teams; require human selection
+                  needsReview = true;
+                  ambiguityData = {
+                    ...ambiguityData,
+                    ambiguity_type: 'team_ambiguous',
+                    candidates: teamResolution.candidates.map((c) => ({
+                      teamId: c.teamId,
+                      teamName: c.teamName,
+                      memberCount: c.memberCount,
+                    })),
+                    reason: teamResolution.reason,
+                  };
+                  console.log(
+                    `[RESOLUTION] Task ${task.id}: User ${assignedToUserId} in multiple teams; flagged for review`,
+                  );
+                } else {
+                  console.log(
+                    `[RESOLUTION] Task ${task.id}: User ${assignedToUserId} has no team (${teamResolution.reason})`,
+                  );
+                }
+              }
+
+              // Step 3: If team resolved, determine team lead
+              if (assignedTeamId) {
+                const leadResolution = await getTeamLeadResolution(supabase, assignedTeamId);
+
+                if (leadResolution.status === 'resolved' && leadResolution.userId) {
+                  assignedTeamLeadId = leadResolution.userId;
+                  console.log(
+                    `[RESOLUTION] Task ${task.id}: Team ${assignedTeamId} → Lead ${assignedTeamLeadId} (${leadResolution.reason})`,
+                  );
+                } else if (leadResolution.status === 'multiple_leads' && leadResolution.candidates) {
+                  // Multiple team leads (unusual); flag for review
+                  needsReview = true;
+                  ambiguityData = {
+                    ...ambiguityData,
+                    ambiguity_type: 'lead_ambiguous',
+                    candidates: leadResolution.candidates.map((c) => ({
+                      userId: c.userId,
+                      displayName: c.displayName,
+                      fullName: c.fullName,
+                    })),
+                    reason: leadResolution.reason,
+                  };
+                  console.log(
+                    `[RESOLUTION] Task ${task.id}: Team has multiple leads; flagged for review`,
+                  );
+                } else {
+                  console.log(
+                    `[RESOLUTION] Task ${task.id}: Team has no lead (${leadResolution.reason})`,
+                  );
+                }
+              }
+
+              // Step 4: Update task with resolved values
+              const updatePayload: Record<string, any> = {
+                needs_assignment_review: needsReview,
+              };
+
+              if (assignedToUserId) {
+                updatePayload.assigned_to_user_id = assignedToUserId;
+              }
+
+              if (assignedTeamId) {
+                updatePayload.team_id = assignedTeamId;
+              }
+
+              if (assignedTeamLeadId) {
+                updatePayload.team_lead_id = assignedTeamLeadId;
+              }
+
+              if (ambiguityData) {
+                updatePayload.assignment_ambiguity_data = ambiguityData;
+              }
+
+              const { error: updateError } = await supabase
+                .from('tasks')
+                .update(updatePayload)
+                .eq('id', task.id);
+
+              if (updateError) {
+                console.error(`[RESOLUTION] Error updating task ${task.id}:`, updateError);
+              }
+            } catch (err) {
+              console.error(`[RESOLUTION] Unexpected error resolving task ${task.id}:`, err);
+              // Non-blocking: continue with next task
+            }
           }
 
           tasks = insertedTasks.map((t) => ({

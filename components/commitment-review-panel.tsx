@@ -1,12 +1,15 @@
 'use client';
 
-import { useState, useEffect, useCallback } from 'react';
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+// components/commitment-review-panel.tsx
+import { useEffect, useMemo, useRef, useState } from 'react';
+import { AlertCircle, AlertTriangle, Check, Clock, Loader2, Pencil, Trash2 } from 'lucide-react';
+import { cn } from '@/lib/utils';
 import { Button } from '@/components/ui/button';
-import { Alert, AlertDescription } from '@/components/ui/alert';
-import { Badge } from '@/components/ui/badge';
 import { Textarea } from '@/components/ui/textarea';
-import { AlertCircle, Clock, CheckCircle2, Loader2, Edit3 } from 'lucide-react';
+import { Alert, AlertDescription } from '@/components/ui/alert';
+import { useAuthFetch } from '@/hooks/use-auth-fetch';
+
+export type ReviewAction = 'approve' | 'dismiss' | 'rephrase';
 
 interface CommitmentReviewPanelProps {
   taskId: string;
@@ -16,7 +19,26 @@ interface CommitmentReviewPanelProps {
   sourceQuote: string;
   hallucinationReason: string;
   confidence: number;
-  graceUntil: Date;
+  graceUntil: string; // ISO string
+  clockSkewMs?: number; // server time minus client time
+  onResolved: (action: ReviewAction) => void;
+}
+
+const ACTIONS: { id: ReviewAction; label: string; hint: string; icon: typeof Check }[] = [
+  { id: 'approve', label: 'Keep', hint: 'The commitment is correct. Remove the flag and keep it as it is.', icon: Check },
+  { id: 'rephrase', label: 'Edit', hint: 'Correct the wording to match what was actually said, then keep it.', icon: Pencil },
+  { id: 'dismiss', label: 'Dismiss', hint: 'Not a real commitment. This deletes it permanently.', icon: Trash2 },
+];
+
+const CONFIRM_LABEL: Record<ReviewAction, string> = {
+  approve: 'Keep commitment',
+  rephrase: 'Save changes',
+  dismiss: 'Delete commitment',
+};
+
+function formatRemaining(ms: number): string {
+  const total = Math.max(0, Math.floor(ms / 1000));
+  return `${Math.floor(total / 60)}:${(total % 60).toString().padStart(2, '0')}`;
 }
 
 export function CommitmentReviewPanel({
@@ -28,327 +50,188 @@ export function CommitmentReviewPanel({
   hallucinationReason,
   confidence,
   graceUntil,
+  clockSkewMs = 0,
+  onResolved,
 }: CommitmentReviewPanelProps) {
-  const [timeRemaining, setTimeRemaining] = useState<string>('');
+  const authFetch = useAuthFetch();
+  const authFetchRef = useRef(authFetch);
+  useEffect(() => {
+    authFetchRef.current = authFetch;
+  }, [authFetch]);
+
+  const graceMs = useMemo(() => new Date(graceUntil).getTime(), [graceUntil]);
+  const [remaining, setRemaining] = useState(() => graceMs - (Date.now() + clockSkewMs));
+  const [action, setAction] = useState<ReviewAction | null>(null);
   const [rephrased, setRephrased] = useState(taskDescription);
-  const [action, setAction] = useState<'approve' | 'dismiss' | 'rephrase' | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [success, setSuccess] = useState(false);
 
-  // Calculate time remaining in grace period
   useEffect(() => {
-    const updateTimer = () => {
-      const now = new Date();
-      const diff = graceUntil.getTime() - now.getTime();
+    const tick = () => setRemaining(graceMs - (Date.now() + clockSkewMs));
+    tick();
+    const id = setInterval(tick, 1000);
+    return () => clearInterval(id);
+  }, [graceMs, clockSkewMs]);
 
-      if (diff <= 0) {
-        setTimeRemaining('Grace period expired');
-        return;
-      }
+  const expired = remaining <= 0;
+  const urgent = !expired && remaining < 60_000;
+  const risk = confidence >= 0.7 ? 'High' : confidence >= 0.5 ? 'Medium' : 'Low';
+  const current = ACTIONS.find((a) => a.id === action);
 
-      const minutes = Math.floor(diff / 60000);
-      const seconds = Math.floor((diff % 60000) / 1000);
-      setTimeRemaining(`${minutes}m ${seconds}s remaining`);
-    };
+  const submit = async () => {
+    if (!action || expired) return;
 
-    updateTimer();
-    const interval = setInterval(updateTimer, 1000);
-
-    return () => clearInterval(interval);
-  }, [graceUntil]);
-
-  const handleApprove = useCallback(async () => {
-    setLoading(true);
-    setError(null);
-
-    try {
-      const res = await fetch(`/api/commitments/${taskId}/hallucination-review`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          action: 'approve',
-        }),
-      });
-
-      if (!res.ok) {
-        const data = await res.json();
-        throw new Error(data.error || 'Failed to approve');
-      }
-
-      setSuccess(true);
-      setAction('approve');
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Error approving commitment');
-    } finally {
-      setLoading(false);
-    }
-  }, [taskId]);
-
-  const handleDismiss = useCallback(async () => {
-    setLoading(true);
-    setError(null);
-
-    try {
-      const res = await fetch(`/api/commitments/${taskId}/hallucination-review`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          action: 'dismiss',
-        }),
-      });
-
-      if (!res.ok) {
-        const data = await res.json();
-        throw new Error(data.error || 'Failed to dismiss');
-      }
-
-      setSuccess(true);
-      setAction('dismiss');
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Error dismissing commitment');
-    } finally {
-      setLoading(false);
-    }
-  }, [taskId]);
-
-  const handleRephrase = useCallback(async () => {
-    if (!rephrased || rephrased === taskDescription) {
-      setError('Please enter a different description');
-      return;
+    if (action === 'rephrase') {
+      const text = rephrased.trim();
+      if (!text) return setError('Description cannot be empty.');
+      if (text === taskDescription.trim()) return setError('Change the description before saving.');
     }
 
     setLoading(true);
     setError(null);
-
     try {
-      const res = await fetch(`/api/commitments/${taskId}/hallucination-review`, {
+      const res = await authFetchRef.current(`/api/commitments/${taskId}/hallucination-review`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          action: 'rephrase',
-          new_description: rephrased,
-        }),
+        body: JSON.stringify(
+          action === 'rephrase' ? { action, new_description: rephrased.trim() } : { action },
+        ),
       });
-
-      if (!res.ok) {
-        const data = await res.json();
-        throw new Error(data.error || 'Failed to rephrase');
-      }
-
-      setSuccess(true);
-      setAction('rephrase');
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error || 'Request failed. Please try again.');
+      onResolved(action);
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Error rephrasing commitment');
+      setError(err instanceof Error ? err.message : 'Something went wrong.');
     } finally {
       setLoading(false);
     }
-  }, [taskId, rephrased, taskDescription]);
-
-  if (success) {
-    const actionMessages = {
-      approve: 'Commitment approved as-is',
-      dismiss: 'Commitment dismissed',
-      rephrase: 'Commitment rephrased and saved',
-    };
-
-    return (
-      <Alert className="bg-green-50 border-green-200">
-        <CheckCircle2 className="h-4 w-4 text-green-600" />
-        <AlertDescription className="text-green-800">
-          {action ? actionMessages[action] : 'Action completed'}
-        </AlertDescription>
-      </Alert>
-    );
-  }
-
-  const confidenceColor =
-    confidence > 0.7 ? 'text-red-600' : confidence > 0.4 ? 'text-yellow-600' : 'text-green-600';
+  };
 
   return (
-    <div className="space-y-6">
-      <Alert className="bg-blue-50 border-blue-200">
-        <AlertCircle className="h-4 w-4 text-blue-600" />
-        <AlertDescription className="text-blue-900">
-          This commitment may not exist in the meeting transcript. You have{' '}
-          <strong className="flex items-center gap-1 inline">
-            <Clock className="h-3 w-3" />
-            {timeRemaining}
-          </strong>{' '}
-          to review and decide.
-        </AlertDescription>
-      </Alert>
+    <div className="overflow-hidden rounded-lg border border-slate-200 bg-white shadow-sm">
+      {/* Commitment */}
+      <div className="px-6 pb-5 pt-5">
+        <div className="flex items-center justify-between text-xs">
+          <span className="inline-flex items-center gap-1.5 font-medium text-slate-600">
+            <span
+              className={cn(
+                'h-2 w-2 rounded-full',
+                risk === 'High' ? 'bg-red-500' : risk === 'Medium' ? 'bg-amber-500' : 'bg-slate-400',
+              )}
+              aria-hidden
+            />
+            {risk} risk · {Math.round(confidence * 100)}%
+          </span>
+          <span
+            className={cn(
+              'inline-flex items-center gap-1.5 font-medium tabular-nums',
+              expired ? 'text-slate-400' : urgent ? 'text-red-600' : 'text-slate-600',
+            )}
+          >
+            <Clock className="h-3.5 w-3.5" aria-hidden />
+            {expired ? 'Window ended' : `${formatRemaining(remaining)} left`}
+          </span>
+        </div>
 
-      {error && (
-        <Alert variant="destructive">
-          <AlertCircle className="h-4 w-4" />
-          <AlertDescription>{error}</AlertDescription>
-        </Alert>
-      )}
+        <p className="mt-4 text-lg font-semibold leading-snug text-slate-900">{taskDescription}</p>
+        <p className="mt-1.5 text-sm text-slate-500">
+          {owner} <span aria-hidden>·</span> {meetingTitle}
+        </p>
 
-      <Card>
-        <CardHeader>
-          <div className="flex items-start justify-between">
-            <div>
-              <CardTitle>Hallucination Detection</CardTitle>
-              <p className="text-sm text-gray-600 mt-2">Meeting: {meetingTitle}</p>
-            </div>
-            <div className="text-right">
-              <Badge variant={confidence > 0.6 ? 'destructive' : 'outline'}>
-                {(confidence * 100).toFixed(0)}% likely hallucination
-              </Badge>
-            </div>
-          </div>
-        </CardHeader>
-        <CardContent className="space-y-6">
-          {/* Original Commitment */}
-          <div>
-            <label className="text-sm font-medium text-gray-700">Original Commitment</label>
-            <div className="mt-2 p-3 bg-gray-50 rounded border border-gray-200">
-              <p className="text-sm font-semibold text-gray-900">{taskDescription}</p>
-              <p className="text-xs text-gray-600 mt-2">Owner: {owner}</p>
-            </div>
+        <div className="mt-5 space-y-3">
+          <div className="flex gap-2.5 rounded-md border border-amber-200 bg-amber-50 px-3 py-2.5 text-sm text-amber-900">
+            <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-amber-600" aria-hidden />
+            <span>{hallucinationReason}</span>
           </div>
 
-          {/* Why It Was Flagged */}
-          <div>
-            <label className="text-sm font-medium text-gray-700">Why It Was Flagged</label>
-            <div className="mt-2 p-3 bg-amber-50 rounded border border-amber-200">
-              <p className="text-sm text-gray-700">{hallucinationReason}</p>
-            </div>
-          </div>
-
-          {/* Source Quote */}
           {sourceQuote && (
-            <div>
-              <label className="text-sm font-medium text-gray-700">Source Quote from Transcript</label>
-              <div className="mt-2 p-3 bg-blue-50 rounded border border-blue-200">
-                <p className="text-sm italic text-gray-700">"{sourceQuote}"</p>
-              </div>
-            </div>
+            <figure className="border-l-2 border-slate-300 pl-3">
+              <figcaption className="text-xs font-medium text-slate-500">From the transcript</figcaption>
+              <blockquote className="mt-0.5 text-sm italic text-slate-700">{sourceQuote}</blockquote>
+            </figure>
           )}
+        </div>
+      </div>
 
-          {/* Options */}
-          <div className="border-t pt-6 space-y-4">
-            <p className="text-sm font-medium text-gray-900">What would you like to do?</p>
+      {/* Decision */}
+      <div className="border-t border-slate-200 bg-slate-50/70 px-6 py-5">
+        {error && (
+          <Alert variant="destructive" className="mb-4">
+            <AlertCircle className="h-4 w-4" />
+            <AlertDescription>{error}</AlertDescription>
+          </Alert>
+        )}
+        {expired && (
+          <Alert className="mb-4">
+            <AlertCircle className="h-4 w-4" />
+            <AlertDescription>
+              The review window has ended. This commitment will be kept automatically. Refresh the list.
+            </AlertDescription>
+          </Alert>
+        )}
 
-            {/* Option 1: Approve */}
-            <div className="p-4 border rounded-lg hover:bg-green-50 transition">
-              <div className="flex items-start gap-3">
-                <input
-                  type="radio"
-                  id="approve"
-                  name="action"
-                  value="approve"
-                  checked={action === 'approve' || (!action && false)}
-                  onChange={() => setAction('approve')}
-                  className="mt-1"
-                />
-                <div className="flex-1">
-                  <label htmlFor="approve" className="font-medium cursor-pointer">
-                    Approve as-is ✓
-                  </label>
-                  <p className="text-sm text-gray-600 mt-1">
-                    Keep the commitment exactly as extracted. The system may have been wrong.
-                  </p>
-                </div>
-              </div>
-            </div>
+        <p className="text-sm font-medium text-slate-900">Your decision</p>
 
-            {/* Option 2: Dismiss */}
-            <div className="p-4 border rounded-lg hover:bg-red-50 transition">
-              <div className="flex items-start gap-3">
-                <input
-                  type="radio"
-                  id="dismiss"
-                  name="action"
-                  value="dismiss"
-                  checked={action === 'dismiss' || (!action && false)}
-                  onChange={() => setAction('dismiss')}
-                  className="mt-1"
-                />
-                <div className="flex-1">
-                  <label htmlFor="dismiss" className="font-medium cursor-pointer">
-                    Dismiss ✕
-                  </label>
-                  <p className="text-sm text-gray-600 mt-1">
-                    Delete this commitment. It does not belong in the system.
-                  </p>
-                </div>
-              </div>
-            </div>
+        <div
+          role="radiogroup"
+          aria-label="Review decision"
+          className="mt-3 grid grid-cols-3 gap-1 rounded-lg border border-slate-200 bg-slate-100 p-1"
+        >
+          {ACTIONS.map(({ id, label, icon: Icon }) => {
+            const selected = action === id;
+            return (
+              <button
+                key={id}
+                type="button"
+                role="radio"
+                aria-checked={selected}
+                disabled={expired}
+                onClick={() => {
+                  setAction(id);
+                  setError(null);
+                }}
+                className={cn(
+                  'inline-flex items-center justify-center gap-1.5 rounded-md px-3 py-2 text-sm font-medium transition-colors disabled:opacity-50',
+                  selected
+                    ? id === 'dismiss'
+                      ? 'bg-white text-red-700 shadow-sm ring-1 ring-red-200'
+                      : 'bg-white text-slate-900 shadow-sm ring-1 ring-slate-200'
+                    : 'text-slate-600 hover:text-slate-900',
+                )}
+              >
+                <Icon className="h-4 w-4" aria-hidden />
+                {label}
+              </button>
+            );
+          })}
+        </div>
 
-            {/* Option 3: Rephrase */}
-            <div className="p-4 border rounded-lg hover:bg-blue-50 transition">
-              <div className="flex items-start gap-3">
-                <input
-                  type="radio"
-                  id="rephrase"
-                  name="action"
-                  value="rephrase"
-                  checked={action === 'rephrase'}
-                  onChange={() => setAction('rephrase')}
-                  className="mt-1"
-                />
-                <div className="flex-1">
-                  <label htmlFor="rephrase" className="font-medium cursor-pointer">
-                    Rephrase ✎
-                  </label>
-                  <p className="text-sm text-gray-600 mt-1">
-                    Edit the description to better match what was actually committed.
-                  </p>
-                  {action === 'rephrase' && (
-                    <Textarea
-                      value={rephrased}
-                      onChange={(e) => setRephrased(e.target.value)}
-                      placeholder="Enter the corrected commitment description"
-                      rows={3}
-                      className="mt-3"
-                    />
-                  )}
-                </div>
-              </div>
-            </div>
-          </div>
+        <p className="mt-3 min-h-[20px] text-sm text-slate-600">
+          {current ? current.hint : 'Choose what should happen to this commitment.'}
+        </p>
 
-          {/* Action Buttons */}
-          <div className="flex gap-3 pt-4 border-t">
-            <Button onClick={handleApprove} disabled={action !== 'approve' || loading}>
-              {loading && action === 'approve' ? (
-                <>
-                  <Loader2 className="h-4 w-4 mr-2 animate-spin" />
-                  Approving...
-                </>
-              ) : (
-                'Approve'
-              )}
-            </Button>
-            <Button onClick={handleDismiss} variant="destructive" disabled={action !== 'dismiss' || loading}>
-              {loading && action === 'dismiss' ? (
-                <>
-                  <Loader2 className="h-4 w-4 mr-2 animate-spin" />
-                  Dismissing...
-                </>
-              ) : (
-                'Dismiss'
-              )}
-            </Button>
-            <Button onClick={handleRephrase} variant="outline" disabled={action !== 'rephrase' || loading}>
-              {loading && action === 'rephrase' ? (
-                <>
-                  <Loader2 className="h-4 w-4 mr-2 animate-spin" />
-                  Saving...
-                </>
-              ) : (
-                <>
-                  <Edit3 className="h-4 w-4 mr-2" />
-                  Rephrase
-                </>
-              )}
-            </Button>
-          </div>
-        </CardContent>
-      </Card>
+        {action === 'rephrase' && (
+          <Textarea
+            value={rephrased}
+            onChange={(e) => setRephrased(e.target.value)}
+            rows={3}
+            placeholder="Enter the corrected commitment description"
+            className="mt-3 bg-white"
+          />
+        )}
+
+        <div className="mt-5 flex justify-end">
+          <Button
+            onClick={submit}
+            disabled={!action || loading || expired}
+            variant={action === 'dismiss' ? 'destructive' : 'default'}
+            className="min-w-[160px]"
+          >
+            {loading && <Loader2 className="mr-2 h-4 w-4 animate-spin" aria-hidden />}
+            {action ? CONFIRM_LABEL[action] : 'Select a decision'}
+          </Button>
+        </div>
+      </div>
     </div>
   );
 }

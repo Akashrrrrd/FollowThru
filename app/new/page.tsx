@@ -6,7 +6,6 @@ import { Loader2, Sparkles, AlertCircle, Users, Upload } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Textarea } from '@/components/ui/textarea';
-import { ProtectedRoute } from '@/components/protected-route';
 import { useAuthFetch } from '@/hooks/use-auth-fetch';
 import { Badge } from '@/components/ui/badge';
 import { LoadingExtraction } from '@/components/loading';
@@ -93,7 +92,11 @@ function NewMeetingContent() {
         return;
       }
 
-      const res = await authFetch('/api/meetings/extract', {
+      // For demo mode, use a simple extract endpoint that doesn't require auth
+      // For authenticated mode, use the full extraction pipeline
+      const endpoint = isDemoMode ? '/api/meetings/extract-demo' : '/api/meetings/extract';
+
+      const res = await authFetch(endpoint, {
         method: 'POST',
         body: JSON.stringify({
           title: title.trim(),
@@ -111,6 +114,18 @@ function NewMeetingContent() {
 
         setError(errorMessage);
         setLoading(false);
+        return;
+      }
+
+      // For demo mode, store results and show them
+      if (isDemoMode && data.demo) {
+        // Store demo data in sessionStorage to pass to results display
+        sessionStorage.setItem('demoMeetingTitle', title.trim());
+        sessionStorage.setItem('demoCommitments', JSON.stringify(data.commitments));
+        sessionStorage.setItem('demoYourName', selectedParticipant);
+        
+        // Redirect to demo results page
+        router.push('/demo-results');
         return;
       }
 
@@ -144,30 +159,17 @@ function NewMeetingContent() {
     setSelectedParticipant('');
     setParticipants([]);
     setError(null);
+    setIsDemoMode(false);
   };
 
   const handleTryDemo = () => {
+    // Simply populate form fields - do NOT advance to participant selection
+    // This allows user to see the demo data and decide to analyze it
     setIsDemoMode(true);
     setTitle('Q4 Mobile App Launch - Technical Planning');
     setTranscript(EXAMPLE_TRANSCRIPT);
     setError(null);
-    // Automatically extract participants and move to participant selection
-    const extractedParticipants = extractParticipants(EXAMPLE_TRANSCRIPT);
-    setParticipants(extractedParticipants);
-    setStep('participant-select');
-    // Auto-select the first participant for demo convenience
-    if (extractedParticipants.length > 0) {
-      setSelectedParticipant(extractedParticipants[0]);
-    }
-  };
-
-  const handleBackToInputFromDemo = () => {
-    setIsDemoMode(false);
-    setTitle('');
-    setTranscript('');
-    setSelectedParticipant('');
-    setParticipants([]);
-    setError(null);
+    // Keep step as 'input' so user can see populated form
     setStep('input');
   };
 
@@ -430,7 +432,7 @@ function NewMeetingContent() {
                 )}
               </Button>
               <Button
-                onClick={isDemoMode ? handleBackToInputFromDemo : handleBackToInput}
+                onClick={handleBackToInput}
                 disabled={loading}
                 variant="outline"
                 className="border-gray-200"
@@ -446,9 +448,5 @@ function NewMeetingContent() {
 }
 
 export default function NewMeetingPage() {
-  return (
-    <ProtectedRoute>
-      <NewMeetingContent />
-    </ProtectedRoute>
-  );
+  return <NewMeetingContent />;
 }

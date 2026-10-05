@@ -38,8 +38,8 @@ const CATEGORIES: Category[] = ['Project management', 'Communication'];
 
 // Module-level: stable reference, not re-created on every render.
 const INTEGRATION_TEMPLATES: IntegrationStatus[] = [
-  { provider: 'jira', name: 'Jira', description: 'Sync issues and tasks bidirectionally.', category: 'Project management', icon: ClipboardList, connected: false },
-  { provider: 'asana', name: 'Asana', description: 'Import tasks and track progress.', category: 'Project management', icon: CheckSquare, connected: false },
+  { provider: 'jira', name: 'Jira', description: 'Sync issues and commitments bidirectionally.', category: 'Project management', icon: ClipboardList, connected: false },
+  { provider: 'asana', name: 'Asana', description: 'Import commitments and track progress.', category: 'Project management', icon: CheckSquare, connected: false },
   { provider: 'slack', name: 'Slack', description: 'Receive follow-up nudges in Slack.', category: 'Communication', icon: MessageSquare, connected: false },
   { provider: 'teams', name: 'Microsoft Teams', description: 'Send alerts to Teams channels.', category: 'Communication', icon: Users, connected: false },
 ];

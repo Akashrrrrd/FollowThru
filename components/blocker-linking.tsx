@@ -166,7 +166,7 @@ export function BlockerLinking({ taskId, taskDescription }: BlockerLinkingProps)
 
           <Select value={selectedBlockerId} onValueChange={setSelectedBlockerId}>
             <SelectTrigger>
-              <SelectValue placeholder="Select a task that blocks this one" />
+              <SelectValue placeholder="Select a commitment that blocks this one" />
             </SelectTrigger>
             <SelectContent>
               {availableTasks.map((task) => (

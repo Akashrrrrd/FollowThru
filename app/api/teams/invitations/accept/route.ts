@@ -17,6 +17,7 @@ export async function POST(request: NextRequest) {
     const user = await getUserFromRequest(request);
 
     if (!user) {
+      console.log('[POST /api/teams/invitations/accept] No user from request');
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     }
 
@@ -29,6 +30,8 @@ export async function POST(request: NextRequest) {
       );
     }
 
+    console.log(`[POST /api/teams/invitations/accept] User ${user.userId} accepting invitation with token ${token.substring(0, 8)}...`);
+
     const supabase = createServerClient();
     const invitationService = new TeamInvitationService(supabase);
 
@@ -37,15 +40,20 @@ export async function POST(request: NextRequest) {
       await supabase.auth.admin.getUserById(user.userId);
 
     if (authError || !authUser?.user) {
-      console.error('Failed to resolve accepting user:', authError);
+      console.error('[POST /api/teams/invitations/accept] Failed to resolve accepting user:', authError);
       return NextResponse.json({ error: 'Failed to accept invitation' }, { status: 500 });
     }
+
+    const userEmail = authUser.user.email ?? null;
+    console.log(`[POST /api/teams/invitations/accept] User email: ${userEmail}`);
 
     await invitationService.acceptInvitation(
       token,
       user.userId,
-      authUser.user.email ?? null,
+      userEmail,
     );
+
+    console.log(`[POST /api/teams/invitations/accept] Successfully accepted invitation for user ${user.userId}`);
 
     return NextResponse.json(
       { message: 'Invitation accepted successfully' },
@@ -53,6 +61,9 @@ export async function POST(request: NextRequest) {
     );
   } catch (err) {
     const errorMessage = err instanceof Error ? err.message : 'Unknown error';
+
+    console.error(`[POST /api/teams/invitations/accept] Error:`, err);
+    console.error(`[POST /api/teams/invitations/accept] Error message:`, errorMessage);
 
     if (errorMessage.includes('Invalid or expired')) {
       return NextResponse.json(
@@ -70,8 +81,6 @@ export async function POST(request: NextRequest) {
         { status: 403 },
       );
     }
-
-    console.error('Error accepting invitation:', err);
 
     return NextResponse.json(
       { error: 'Failed to accept invitation' },

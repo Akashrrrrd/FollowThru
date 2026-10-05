@@ -32,8 +32,11 @@ export function ProfileCheck({ children }: ProfileCheckProps) {
   const [needsOnboarding, setNeedsOnboarding] = useState(false);
 
   // Routes that don't require profile completion
-  const skipProfileCheckRoutes = ['/onboarding', '/login', '/signup', '/logout'];
+  const skipProfileCheckRoutes = ['/onboarding', '/login', '/signup', '/logout', '/new', '/accept-team-invitation', '/maintenance'];
   const shouldSkipCheck = skipProfileCheckRoutes.some((route) => pathname?.startsWith(route));
+  
+  // Routes that should redirect to dashboard if logged in
+  const shouldRedirectToDashboard = pathname === '/' && user;
 
   useEffect(() => {
     if (authLoading || shouldSkipCheck || !user) {
@@ -63,6 +66,18 @@ export function ProfileCheck({ children }: ProfileCheckProps) {
 
     checkProfile();
   }, [authLoading, user, shouldSkipCheck, authFetch, pathname]);
+
+  // Redirect to dashboard if logged in and on home page
+  useEffect(() => {
+    if (!authLoading && user && pathname === '/' && !profileChecked) {
+      // Wait for profile check to complete before redirecting
+      return;
+    }
+    
+    if (!authLoading && user && pathname === '/' && profileChecked && !needsOnboarding) {
+      router.push('/dashboard');
+    }
+  }, [authLoading, user, pathname, profileChecked, needsOnboarding, router]);
 
   // Redirect to onboarding if needed
   useEffect(() => {

@@ -21,6 +21,11 @@ import {
   isOverdue,
 } from '@/lib/lifecycle';
 
+import {
+  getAccountabilityStatus,
+  type AccountabilityMetrics,
+} from '@/lib/accountability-status';
+
 export const dynamic = 'force-dynamic';
 
 type AccountabilityTask = {
@@ -32,6 +37,7 @@ type AccountabilityTask = {
   team_id: string | null;
   status: string | null;
   due_date: string | null;
+  escalation_level?: number;
 };
 
 type OwnerMetric = {
@@ -42,6 +48,7 @@ type OwnerMetric = {
   blocked: number;
   overdue: number;
   completion_rate: number;
+  status?: string; // ON_TRACK, AT_RISK, NEEDS_ATTENTION
 };
 
 type TeamMetric = {
@@ -53,6 +60,14 @@ type TeamMetric = {
   blocked: number;
   overdue: number;
   completion_rate: number;
+  status?: string; // ON_TRACK, AT_RISK, NEEDS_ATTENTION
+};
+
+type EscalationRow = {
+  task_id: string;
+  status: string;
+  escalation_level: number;
+  created_at: string;
 };
 
 function isCompleted(status: string | null) {
@@ -72,6 +87,7 @@ function calculateRate(
 
 function buildOwnerMetrics(
   tasks: AccountabilityTask[],
+  escalationsByTaskId: Map<string, EscalationRow>,
 ): OwnerMetric[] {
   const map = new Map<
     string,
@@ -82,8 +98,12 @@ function buildOwnerMetrics(
       in_progress: number;
       blocked: number;
       overdue: number;
+      escalation_level: number;
+      recent_escalation_7d: number;
     }
   >();
+
+  const sevenDaysAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
 
   for (const task of tasks) {
     const owner =
@@ -93,8 +113,12 @@ function buildOwnerMetrics(
         : 'Unassigned';
 
     const existing = map.get(owner);
+    const escalation = escalationsByTaskId.get(task.id);
 
     if (!existing) {
+      const recentEscalation =
+        escalation && new Date(escalation.created_at) > sevenDaysAgo ? 1 : 0;
+
       map.set(owner, {
         owner,
         total: 1,
@@ -104,6 +128,8 @@ function buildOwnerMetrics(
         blocked:
           task.status === 'blocked' ? 1 : 0,
         overdue: isOverdue({ due_date: task.due_date, status: task.status } as any) ? 1 : 0,
+        escalation_level: escalation?.escalation_level ?? 0,
+        recent_escalation_7d: recentEscalation,
       });
 
       continue;
@@ -126,6 +152,16 @@ function buildOwnerMetrics(
     if (isOverdue({ due_date: task.due_date, status: task.status } as any)) {
       existing.overdue += 1;
     }
+
+    // Track highest escalation level
+    if (escalation && escalation.escalation_level > existing.escalation_level) {
+      existing.escalation_level = escalation.escalation_level;
+    }
+
+    // Track recent escalation
+    if (escalation && new Date(escalation.created_at) > sevenDaysAgo) {
+      existing.recent_escalation_7d = 1;
+    }
   }
 
   return Array.from(map.values())
@@ -140,6 +176,14 @@ function buildOwnerMetrics(
         item.completed,
         item.total,
       ),
+      status: getAccountabilityStatus({
+        total: item.total,
+        completed: item.completed,
+        overdue: item.overdue,
+        completion_rate: calculateRate(item.completed, item.total),
+        escalation_level: item.escalation_level,
+        recent_escalation_7d: item.recent_escalation_7d,
+      }),
     }))
     .sort((a, b) => {
       if (b.total !== a.total) {
@@ -156,6 +200,7 @@ function buildTeamMetrics(
     id: string;
     name: string;
   }>,
+  escalationsByTaskId: Map<string, EscalationRow>,
 ): TeamMetric[] {
   const map = new Map<
     string,
@@ -167,8 +212,12 @@ function buildTeamMetrics(
       in_progress: number;
       blocked: number;
       overdue: number;
+      escalation_level: number;
+      recent_escalation_7d: number;
     }
   >();
+
+  const sevenDaysAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
 
   // Initialize every team so teams with zero
   // commitments are still returned.
@@ -181,6 +230,8 @@ function buildTeamMetrics(
       in_progress: 0,
       blocked: 0,
       overdue: 0,
+      escalation_level: 0,
+      recent_escalation_7d: 0,
     });
   }
 
@@ -194,6 +245,8 @@ function buildTeamMetrics(
     if (!existing) {
       continue;
     }
+
+    const escalation = escalationsByTaskId.get(task.id);
 
     existing.total += 1;
 
@@ -212,6 +265,16 @@ function buildTeamMetrics(
     if (isOverdue({ due_date: task.due_date, status: task.status } as any)) {
       existing.overdue += 1;
     }
+
+    // Track highest escalation level in team
+    if (escalation && escalation.escalation_level > existing.escalation_level) {
+      existing.escalation_level = escalation.escalation_level;
+    }
+
+    // Track recent escalation
+    if (escalation && new Date(escalation.created_at) > sevenDaysAgo) {
+      existing.recent_escalation_7d = 1;
+    }
   }
 
   return Array.from(map.values())
@@ -227,6 +290,14 @@ function buildTeamMetrics(
         item.completed,
         item.total,
       ),
+      status: getAccountabilityStatus({
+        total: item.total,
+        completed: item.completed,
+        overdue: item.overdue,
+        completion_rate: calculateRate(item.completed, item.total),
+        escalation_level: item.escalation_level,
+        recent_escalation_7d: item.recent_escalation_7d,
+      }),
     }))
     .sort((a, b) => {
       if (b.total !== a.total) {
@@ -431,6 +502,45 @@ export async function GET(req: NextRequest) {
 
     /*
      * -------------------------------------------------------
+     * GET ESCALATION STATE FOR TASKS
+     * -------------------------------------------------------
+     * Fetch escalation_level for each task to determine
+     * accountability status.
+     */
+
+    const taskIds = accountabilityTasks.map(t => t.id);
+    
+    let escalationsByTaskId = new Map<string, EscalationRow>();
+    
+    if (taskIds.length > 0) {
+      const { data: escalations, error: escalationError } = await supabase
+        .from('escalation_state')
+        .select('task_id, escalation_level')
+        .in('task_id', taskIds);
+
+      if (escalationError) {
+        console.error(
+          'Accountability escalation error:',
+          escalationError,
+        );
+        // Continue without escalation data rather than failing
+      } else if (escalations) {
+        escalationsByTaskId = new Map(
+          escalations.map((e: any) => [
+            e.task_id,
+            {
+              task_id: e.task_id,
+              escalation_level: e.escalation_level,
+              status: 'active',
+              created_at: new Date().toISOString(),
+            } as EscalationRow,
+          ]),
+        );
+      }
+    }
+
+    /*
+     * -------------------------------------------------------
      * ORGANIZATION-LEVEL METRICS
      * -------------------------------------------------------
      */
@@ -467,6 +577,18 @@ export async function GET(req: NextRequest) {
     const completionRate =
       calculateRate(completed, total);
 
+    // Calculate organization status
+    const orgStatus = getAccountabilityStatus({
+      total,
+      completed,
+      overdue,
+      completion_rate: completionRate,
+      escalation_level: Math.max(
+        ...Array.from(escalationsByTaskId.values()).map(e => e.escalation_level),
+        0,
+      ),
+    });
+
     /*
      * -------------------------------------------------------
      * OWNER METRICS
@@ -476,6 +598,7 @@ export async function GET(req: NextRequest) {
     const ownerMetrics =
       buildOwnerMetrics(
         accountabilityTasks,
+        escalationsByTaskId,
       );
 
     /*
@@ -491,6 +614,7 @@ export async function GET(req: NextRequest) {
           id: team.id,
           name: team.name,
         })),
+        escalationsByTaskId,
       );
 
     /*
@@ -533,6 +657,26 @@ export async function GET(req: NextRequest) {
         isOverdue({ due_date: task.due_date, status: task.status } as any),
       ).length;
 
+    const myCompletionRate = calculateRate(
+      myCompleted,
+      myTotal,
+    );
+
+    // Get my highest escalation level
+    const myMaxEscalation = Math.max(
+      ...myTasks
+        .map(t => escalationsByTaskId.get(t.id)?.escalation_level ?? 0),
+      0,
+    );
+
+    const myStatus = getAccountabilityStatus({
+      total: myTotal,
+      completed: myCompleted,
+      overdue: myOverdue,
+      completion_rate: myCompletionRate,
+      escalation_level: myMaxEscalation,
+    });
+
     /*
      * -------------------------------------------------------
      * RESPONSE
@@ -555,16 +699,18 @@ export async function GET(req: NextRequest) {
         completion_rate: completionRate,
       },
 
+      accountability_status: {
+        organization: orgStatus,
+        my_status: myStatus,
+      },
+
       mine: {
         total: myTotal,
         completed: myCompleted,
         in_progress: myInProgress,
         blocked: myBlocked,
         overdue: myOverdue,
-        completion_rate: calculateRate(
-          myCompleted,
-          myTotal,
-        ),
+        completion_rate: myCompletionRate,
       },
 
       owners: ownerMetrics,

@@ -53,14 +53,15 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql;
 
--- Create trigger for updated_at
+-- Create trigger for updated_at (drop first to ensure idempotency)
+DROP TRIGGER IF EXISTS user_profiles_updated_at_trigger ON user_profiles;
 CREATE TRIGGER user_profiles_updated_at_trigger
 BEFORE UPDATE ON user_profiles
 FOR EACH ROW
 EXECUTE FUNCTION update_user_profiles_updated_at();
 
 -- Create index on display_name for participant matching
-CREATE INDEX idx_user_profiles_display_name ON user_profiles(display_name);
+CREATE INDEX IF NOT EXISTS idx_user_profiles_display_name ON user_profiles(display_name);
 
 -- Add comment for clarity
 COMMENT ON TABLE user_profiles IS 'User identity and profile information. Extends Supabase auth.users with application-specific profile data.';

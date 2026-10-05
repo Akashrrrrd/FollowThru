@@ -1,18 +1,14 @@
 /**
  * GET  /api/teams/[teamId]/members - List team members (+ pending invitations for managers)
  * POST /api/teams/[teamId]/members - Add member to team or invite by email (managers/team leads only)
+ *
+ * The organization is resolved from the TEAM itself (see getTeamAccess), so users who belong
+ * to several organizations can still see the members of teams they belong to.
  */
 
 import { NextRequest, NextResponse } from 'next/server';
-import {
-  createServerClient,
-  getUserFromRequest,
-} from '@/lib/supabase-server';
-import { getUserOrganizationContext } from '@/lib/organization-context';
-import {
-  canManageTeam,
-  teamBelongsToOrganization,
-} from '@/lib/team-authorization';
+import { createServerClient, getUserFromRequest } from '@/lib/supabase-server';
+import { getTeamAccess } from '@/lib/team-access';
 import { TeamInvitationService } from '@/lib/team-invitation-service';
 import {
   generateTeamInvitationEmailHtml,
@@ -29,39 +25,38 @@ async function resolveIdentity(supabase: Supabase, userId: string) {
   let displayName: string | null = null;
   let fullName: string | null = null;
 
-  const { data: profile, error: profileError } = await supabase
-    .from('user_profiles')
-    .select('display_name, full_name')
-    .eq('id', userId)
-    .maybeSingle();
+  const [profileResult, authResult] = await Promise.all([
+    supabase
+      .from('user_profiles')
+      .select('display_name, full_name')
+      .eq('id', userId)
+      .maybeSingle(),
+    supabase.auth.admin.getUserById(userId).catch((err: unknown) => {
+      console.warn(`Failed to resolve auth user ${userId}:`, err);
+      return null;
+    }),
+  ]);
 
-  if (profileError) {
-    console.warn(`Failed to fetch profile for ${userId}:`, profileError);
+  if (profileResult.error) {
+    console.warn(`Failed to fetch profile for ${userId}:`, profileResult.error);
   }
-  if (profile) {
-    displayName = profile.display_name || null;
-    fullName = profile.full_name || null;
+  if (profileResult.data) {
+    displayName = profileResult.data.display_name || null;
+    fullName = profileResult.data.full_name || null;
   }
 
-  try {
-    const { data: authUser, error: authError } =
-      await supabase.auth.admin.getUserById(userId);
-    if (authError) {
-      console.warn(`Failed to fetch auth user ${userId}:`, authError);
-    } else if (authUser?.user) {
-      email = authUser.user.email ?? null;
+  if (authResult) {
+    if (authResult.error) {
+      console.warn(`Failed to fetch auth user ${userId}:`, authResult.error);
+    } else {
+      email = authResult.data?.user?.email ?? null;
     }
-  } catch (err) {
-    console.warn(`Failed to resolve auth user ${userId}:`, err);
   }
 
   return { id: userId, email, display_name: displayName, full_name: fullName };
 }
 
-/**
- * Find an auth user by email, paging through all users.
- * (The old code only looked at the first 1000 users.)
- */
+/** Find an auth user by (lower-cased) email, paging through all users. */
 async function findAuthUserByEmail(supabase: Supabase, email: string) {
   const perPage = 1000;
   for (let page = 1; page <= 50; page++) {
@@ -86,17 +81,9 @@ export async function GET(
 
     const supabase = createServerClient();
 
-    const orgContext = await getUserOrganizationContext(supabase, user.userId);
-    if (!orgContext) {
-      return NextResponse.json({ error: 'User has no organization' }, { status: 403 });
-    }
-
-    const teamValid = await teamBelongsToOrganization(
-      supabase,
-      params.teamId,
-      orgContext.organizationId,
-    );
-    if (!teamValid) {
+    // Team must exist and the user must belong to the team's organization.
+    const access = await getTeamAccess(supabase, user.userId, params.teamId);
+    if (!access) {
       return NextResponse.json({ error: 'Team not found' }, { status: 404 });
     }
 
@@ -122,15 +109,9 @@ export async function GET(
       })),
     );
 
-    // Pending invitations are only shown to people who can manage the team.
+    // Pending invitations are only visible to people who can manage the team.
     let invitations: unknown[] = [];
-    const canManage = await canManageTeam(
-      supabase,
-      user.userId,
-      params.teamId,
-      orgContext.organizationId,
-    );
-    if (canManage) {
+    if (access.canManage) {
       try {
         invitations = await new TeamInvitationService(supabase).getPendingInvitationsForTeam(
           params.teamId,
@@ -140,7 +121,15 @@ export async function GET(
       }
     }
 
-    return NextResponse.json({ members: formattedMembers, invitations });
+    return NextResponse.json({
+      members: formattedMembers,
+      invitations,
+      // Permissions for the CURRENT user, computed server-side. The UI uses these
+      // to show/hide edit controls (the API still enforces them on every write).
+      can_manage: access.canManage,
+      org_role: access.orgRole,
+      team_role: access.teamRole,
+    });
   } catch (err) {
     console.error('Team members GET error:', err);
     return NextResponse.json({ error: 'Internal server error' }, { status: 500 });
@@ -159,27 +148,11 @@ export async function POST(
 
     const supabase = createServerClient();
 
-    const orgContext = await getUserOrganizationContext(supabase, user.userId);
-    if (!orgContext) {
-      return NextResponse.json({ error: 'User has no organization' }, { status: 403 });
-    }
-
-    const teamValid = await teamBelongsToOrganization(
-      supabase,
-      params.teamId,
-      orgContext.organizationId,
-    );
-    if (!teamValid) {
+    const access = await getTeamAccess(supabase, user.userId, params.teamId);
+    if (!access) {
       return NextResponse.json({ error: 'Team not found' }, { status: 404 });
     }
-
-    const canManage = await canManageTeam(
-      supabase,
-      user.userId,
-      params.teamId,
-      orgContext.organizationId,
-    );
-    if (!canManage) {
+    if (!access.canManage) {
       return NextResponse.json(
         { error: 'You do not have permission to manage this team' },
         { status: 403 },
@@ -197,8 +170,7 @@ export async function POST(
       return NextResponse.json({ error: 'Invalid role' }, { status: 400 });
     }
 
-    // Resolve the target: either an existing user (by id or by email) or a
-    // brand-new email that needs an invitation.
+    // Resolve the target: an existing user (by id or email) or a new email to invite.
     let targetUserId: string | undefined =
       typeof providedUserId === 'string' ? providedUserId : undefined;
     let normalizedEmail: string | null = null;
@@ -210,18 +182,16 @@ export async function POST(
 
       normalizedEmail = email.trim().toLowerCase();
 
-      let foundUser;
       try {
-        foundUser = await findAuthUserByEmail(supabase, normalizedEmail);
+        const foundUser = await findAuthUserByEmail(supabase, normalizedEmail);
+        if (foundUser) targetUserId = foundUser.id;
       } catch (err) {
         console.error('Failed to lookup user:', err);
         return NextResponse.json({ error: 'Failed to lookup user' }, { status: 500 });
       }
-
-      if (foundUser) targetUserId = foundUser.id;
     }
 
-    // ---- Existing user: check organization membership ----
+    // ---- Existing user: is she already in the team's organization? ----
     let isOrgMember = false;
 
     if (targetUserId) {
@@ -229,7 +199,7 @@ export async function POST(
         .from('organization_members')
         .select('id')
         .eq('user_id', targetUserId)
-        .eq('organization_id', orgContext.organizationId)
+        .eq('organization_id', access.organizationId)
         .maybeSingle();
 
       if (orgError) {
@@ -242,7 +212,6 @@ export async function POST(
 
       isOrgMember = !!orgMember;
 
-      // A raw userId that is outside the org can't be invited (no email).
       if (!isOrgMember && !normalizedEmail) {
         return NextResponse.json(
           { error: 'User is not a member of this organization' },
@@ -251,9 +220,9 @@ export async function POST(
       }
     }
 
-    // Already in the organization: add straight to the team.
-    // (An existing account that is NOT in the org falls through to the
-    // invitation flow below; accepting the invite adds them to the org.)
+    // In the organization already: add straight to the team.
+    // (An account that is NOT in the org falls through to the invitation flow;
+    // accepting the invitation adds them to the org.)
     if (targetUserId && isOrgMember) {
       const { data: member, error } = await supabase
         .from('team_members')
@@ -307,13 +276,13 @@ export async function POST(
         supabase
           .from('organizations')
           .select('name')
-          .eq('id', orgContext.organizationId)
+          .eq('id', access.organizationId)
           .maybeSingle(),
       ]);
 
     const invitation = await invitationService.createInvitation({
       teamId: params.teamId,
-      organizationId: orgContext.organizationId,
+      organizationId: access.organizationId,
       email: normalizedEmail,
       role: role as 'team_lead' | 'member',
       invitedBy: user.userId,

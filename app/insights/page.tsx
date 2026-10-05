@@ -168,7 +168,7 @@ function InsightsContent() {
 
         <p className="mt-1 text-sm text-gray-500">
 
-          Analytics across all your meetings and tasks.
+          Analytics across all your meetings and commitments.
 
         </p>
 
@@ -190,7 +190,7 @@ function InsightsContent() {
 
             <div>
 
-              <p className="text-sm text-gray-500">Total tasks</p>
+              <p className="text-sm text-gray-500">Total commitments</p>
 
               <p className="text-2xl font-bold text-gray-900">
 
@@ -266,7 +266,7 @@ function InsightsContent() {
 
           <h2 className="mb-4 text-sm font-semibold uppercase tracking-wide text-gray-400">
 
-            Tasks per meeting (recent 8)
+            Commitments per meeting (recent 8)
 
           </h2>
 
@@ -326,7 +326,7 @@ function InsightsContent() {
 
       )}
 
-      {/* Tasks by owner */}
+      {/* Commitments by owner */}
 
       {ownerStats.length > 0 && (
 
@@ -334,7 +334,7 @@ function InsightsContent() {
 
           <h2 className="mb-4 text-sm font-semibold uppercase tracking-wide text-gray-400">
 
-            Tasks by owner
+            Commitments by owner
 
           </h2>
 
@@ -370,7 +370,7 @@ function InsightsContent() {
 
                   <span className="text-gray-500">
 
-                    {stat.total} task{stat.total !== 1 ? 's' : ''}
+                    {stat.total} commitment{stat.total !== 1 ? 's' : ''}
 
                   </span>
 

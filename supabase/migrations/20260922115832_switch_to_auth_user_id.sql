@@ -37,17 +37,9 @@ ALTER TABLE tasks ALTER COLUMN user_id SET DEFAULT auth.uid();
 ALTER TABLE tasks ADD CONSTRAINT tasks_user_id_fkey
   FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
 
--- Drop old anon policies on meetings
-DROP POLICY IF EXISTS "anon_select_meetings" ON meetings;
-DROP POLICY IF EXISTS "anon_insert_meetings" ON meetings;
-DROP POLICY IF EXISTS "anon_update_meetings" ON meetings;
-DROP POLICY IF EXISTS "anon_delete_meetings" ON meetings;
-
--- Drop old anon policies on tasks
-DROP POLICY IF EXISTS "anon_select_tasks" ON tasks;
-DROP POLICY IF EXISTS "anon_insert_tasks" ON tasks;
-DROP POLICY IF EXISTS "anon_update_tasks" ON tasks;
-DROP POLICY IF EXISTS "anon_delete_tasks" ON tasks;
+-- Re-enable RLS (was disabled in previous migration to allow type change)
+ALTER TABLE meetings ENABLE ROW LEVEL SECURITY;
+ALTER TABLE tasks ENABLE ROW LEVEL SECURITY;
 
 -- New authenticated-only policies for meetings
 DROP POLICY IF EXISTS "select_own_meetings" ON meetings;

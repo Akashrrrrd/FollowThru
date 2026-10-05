@@ -1,11 +1,12 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useCallback } from 'react';
 import { useParams } from 'next/navigation';
 import { ProtectedRoute } from '@/components/protected-route';
 import { PageLoading } from '@/components/page-loading';
 import { EvidencePlayback } from '@/components/evidence-playback';
 import { BlockerLinking } from '@/components/blocker-linking';
+import { useRealtimeCommitments } from '@/hooks/use-realtime-commitments';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Calendar, User, AlertCircle } from 'lucide-react';
@@ -30,21 +31,45 @@ function CommitmentDetailContent() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
-  useEffect(() => {
-    const fetchCommitment = async () => {
-      try {
-        const res = await fetch(`/api/tasks/${taskId}`);
-        if (!res.ok) throw new Error('Failed to fetch');
-        const data = await res.json();
-        setCommitment(data.task);
-      } catch (err) {
-        console.error('Fetch error:', err);
-        setError(err instanceof Error ? err.message : 'Failed to load commitment');
-      } finally {
-        setLoading(false);
+  /* Subscribe to real-time updates for this specific commitment */
+  useRealtimeCommitments(useCallback((event, updated) => {
+    if (updated.id === taskId) {
+      if (event === 'delete') {
+        setError('This commitment has been deleted');
+        setCommitment(null);
+      } else if (event === 'update' || event === 'insert') {
+        // Update the displayed commitment with the latest data
+        // Only update fields that exist on Task
+        setCommitment((prev) => {
+          if (!prev) return null;
+          return {
+            ...prev,
+            description: updated.description,
+            owner: updated.owner,
+            due_date: updated.due_date || '',
+            status: updated.status,
+            blocker: updated.blocker ? true : false,
+          };
+        });
       }
-    };
+    }
+  }, [taskId]));
 
+  const fetchCommitment = useCallback(async () => {
+    try {
+      const res = await fetch(`/api/tasks/${taskId}`);
+      if (!res.ok) throw new Error('Failed to fetch');
+      const data = await res.json();
+      setCommitment(data.task);
+    } catch (err) {
+      console.error('Fetch error:', err);
+      setError(err instanceof Error ? err.message : 'Failed to load commitment');
+    } finally {
+      setLoading(false);
+    }
+  }, [taskId]);
+
+  useEffect(() => {
     if (taskId) fetchCommitment();
   }, [taskId]);
 

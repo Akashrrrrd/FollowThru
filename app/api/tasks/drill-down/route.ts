@@ -37,7 +37,7 @@ export async function GET(req: NextRequest) {
 
     if (!taskId) {
       return NextResponse.json(
-        { error: 'Missing required parameter: task_id' },
+        { error: 'Missing required parameter: commitment_id' },
         { status: 400 },
       );
     }
@@ -106,7 +106,7 @@ export async function GET(req: NextRequest) {
     }
 
     if (!task) {
-      return NextResponse.json({ error: 'Task not found' }, { status: 404 });
+      return NextResponse.json({ error: 'Commitment not found' }, { status: 404 });
     }
 
     // Authorization check
@@ -120,7 +120,7 @@ export async function GET(req: NextRequest) {
 
     if (!isOwner && !isAssignee && !isOrgManager && !isTeamLead) {
       return NextResponse.json(
-        { error: 'Not authorized to view this task' },
+        { error: 'Not authorized to view this commitment' },
         { status: 403 },
       );
     }
@@ -128,7 +128,7 @@ export async function GET(req: NextRequest) {
     // Verify org boundaries
     if (task.organization_id !== orgContext.organizationId) {
       return NextResponse.json(
-        { error: 'Task does not belong to your organization' },
+        { error: 'Commitment does not belong to your organization' },
         { status: 403 },
       );
     }

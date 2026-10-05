@@ -1,225 +1,173 @@
 /**
- * GET /api/teams - List teams in organization
- * POST /api/teams - Create new team (managers only)
+ * GET  /api/teams - Teams the current user can see, across ALL of their organizations
+ * POST /api/teams - Create a team (organization owners/managers only)
  */
 
 import { NextRequest, NextResponse } from 'next/server';
 import { createServerClient, getUserFromRequest } from '@/lib/supabase-server';
-import { getUserOrganizationContext } from '@/lib/organization-context';
-import { isManagerInOrganization } from '@/lib/team-authorization';
+import { getUserOrganizations } from '@/lib/organization-context';
 
 export const dynamic = 'force-dynamic';
 
 export async function GET(request: NextRequest) {
   try {
     const user = await getUserFromRequest(request);
-
     if (!user) {
-      console.log('[/api/teams] No user from request');
-      return NextResponse.json(
-        { error: 'Unauthorized' },
-        { status: 401 }
-      );
+      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     }
 
-    console.log(`[/api/teams] User ${user.userId} requesting teams`);
-    
     const supabase = createServerClient();
 
-    // Get user's organization
-    const orgContext = await getUserOrganizationContext(
-      supabase,
-      user.userId
-    );
-
-    if (!orgContext) {
-      console.log(`[/api/teams] User ${user.userId} has no organization`);
-      return NextResponse.json(
-        { error: 'User has no organization' },
-        { status: 403 }
-      );
+    const orgs = await getUserOrganizations(supabase, user.userId);
+    if (orgs.length === 0) {
+      return NextResponse.json({ teams: [] });
     }
 
-    console.log(`[/api/teams] User ${user.userId} org ${orgContext.organizationId}`);
+    const orgIds = orgs.map((o) => o.organizationId);
+    const managedOrgIds = new Set(
+      orgs.filter((o) => o.role === 'owner' || o.role === 'manager').map((o) => o.organizationId),
+    );
 
-    // Query team_members to find teams where the current user is a member
-    const { data: userMemberships, error: membershipError } = await supabase
+    // The user's own team memberships
+    const { data: myMemberships, error: myError } = await supabase
       .from('team_members')
-      .select('team_id')
+      .select('team_id, role')
       .eq('user_id', user.userId);
 
-    if (membershipError) {
-      console.error('[/api/teams] Failed to fetch user team memberships:', membershipError);
-      return NextResponse.json(
-        { error: 'Failed to fetch team memberships' },
-        { status: 500 }
-      );
+    if (myError) {
+      console.error('Failed to load team memberships:', myError);
+      return NextResponse.json({ error: 'Failed to load teams' }, { status: 500 });
     }
 
-    // If user has no team memberships, return empty array
-    const userTeamIds = (userMemberships ?? []).map(m => m.team_id);
-    
-    console.log(`[/api/teams] User ${user.userId} has ${userTeamIds.length} team memberships: ${userTeamIds.join(', ')}`);
-    
-    if (userTeamIds.length === 0) {
-      console.log(`[/api/teams] Returning empty teams for user ${user.userId}`);
-      return NextResponse.json({
-        teams: [],
-      });
-    }
+    const myRoleByTeam = new Map<string, 'team_lead' | 'member'>(
+      (myMemberships ?? []).map((m) => [m.team_id, m.role as 'team_lead' | 'member']),
+    );
 
-    // Get teams where the user is a member
-    const { data: teams, error } = await supabase
+    // Only teams inside organizations the user actually belongs to
+    const { data: allTeams, error: teamsError } = await supabase
       .from('teams')
-      .select(`
-        id,
-        name,
-        description,
-        created_by,
-        created_at,
-        updated_at,
-        team_members (
-          id,
-          user_id,
-          role
-        )
-      `)
-      .eq('organization_id', orgContext.organizationId)
-      .in('id', userTeamIds)
-      .order('name', { ascending: true });
+      .select('*')
+      .in('organization_id', orgIds)
+      .order('created_at', { ascending: true });
 
-    if (error) {
-      console.error('[/api/teams] Failed to fetch teams:', error);
-
-      return NextResponse.json(
-        { error: 'Failed to fetch teams' },
-        { status: 500 }
-      );
+    if (teamsError) {
+      console.error('Failed to load teams:', teamsError);
+      return NextResponse.json({ error: 'Failed to load teams' }, { status: 500 });
     }
 
-    console.log(`[/api/teams] Fetched ${teams?.length ?? 0} teams for user ${user.userId}`);
+    // Owners/managers see every team in their org; members see only their own teams
+    const visible = (allTeams ?? []).filter(
+      (t) => managedOrgIds.has(t.organization_id) || myRoleByTeam.has(t.id),
+    );
 
-    const formattedTeams = (teams ?? []).map((team) => ({
-      id: team.id,
-      name: team.name,
-      description: team.description,
-      created_by: team.created_by,
-      created_at: team.created_at,
-      updated_at: team.updated_at,
-      member_count: team.team_members?.length ?? 0,
-      team_members: team.team_members ?? [],
-    }));
+    const countByTeam = new Map<string, number>();
+    if (visible.length > 0) {
+      const { data: rows, error: countError } = await supabase
+        .from('team_members')
+        .select('team_id')
+        .in(
+          'team_id',
+          visible.map((t) => t.id),
+        );
+
+      if (countError) {
+        console.warn('Failed to load member counts:', countError);
+      }
+      for (const r of rows ?? []) {
+        countByTeam.set(r.team_id, (countByTeam.get(r.team_id) ?? 0) + 1);
+      }
+    }
 
     return NextResponse.json({
-      teams: formattedTeams,
+      teams: visible.map((t) => ({
+        ...t,
+        member_count: countByTeam.get(t.id) ?? 0,
+        user_role: myRoleByTeam.get(t.id),
+      })),
     });
   } catch (err) {
-    console.error('[/api/teams] Teams GET error:', err);
-
-    return NextResponse.json(
-      { error: 'Internal server error' },
-      { status: 500 }
-    );
+    console.error('Teams GET error:', err);
+    return NextResponse.json({ error: 'Internal server error' }, { status: 500 });
   }
 }
 
 export async function POST(request: NextRequest) {
   try {
     const user = await getUserFromRequest(request);
-
     if (!user) {
-      return NextResponse.json(
-        { error: 'Unauthorized' },
-        { status: 401 }
-      );
+      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+    }
+
+    const body = (await request.json().catch(() => null)) as {
+      name?: unknown;
+      description?: unknown;
+      organization_id?: unknown;
+    } | null;
+
+    const name = typeof body?.name === 'string' ? body.name.trim() : '';
+    const description =
+      typeof body?.description === 'string' && body.description.trim()
+        ? body.description.trim()
+        : null;
+
+    if (!name) {
+      return NextResponse.json({ error: 'Team name is required' }, { status: 400 });
+    }
+    if (name.length > 100) {
+      return NextResponse.json({ error: 'Team name must be at most 100 characters' }, { status: 400 });
     }
 
     const supabase = createServerClient();
 
-    // Get user's organization
-    const orgContext = await getUserOrganizationContext(
-      supabase,
-      user.userId
-    );
+    // Organization is decided from the database, never trusted from the request:
+    // the user must be an owner/manager of it.
+    const orgs = await getUserOrganizations(supabase, user.userId);
+    const managed = orgs.filter((o) => o.role === 'owner' || o.role === 'manager');
 
-    if (!orgContext) {
+    if (managed.length === 0) {
       return NextResponse.json(
-        { error: 'User has no organization' },
-        { status: 403 }
+        { error: 'Only organization owners and managers can create teams' },
+        { status: 403 },
       );
     }
 
-    // Check if user is a manager
-    const isManager = await isManagerInOrganization(
-      supabase,
-      user.userId,
-      orgContext.organizationId
-    );
-
-    if (!isManager) {
-      return NextResponse.json(
-        { error: 'Only managers can create teams' },
-        { status: 403 }
-      );
+    let organizationId = managed[0].organizationId;
+    if (typeof body?.organization_id === 'string') {
+      const requested = managed.find((o) => o.organizationId === body.organization_id);
+      if (!requested) {
+        return NextResponse.json(
+          { error: 'You cannot create teams in that organization' },
+          { status: 403 },
+        );
+      }
+      organizationId = requested.organizationId;
     }
 
-    const body = await request.json();
-
-    const {
-      name,
-      description,
-    } = body as {
-      name?: string;
-      description?: string;
-    };
-
-    // Validate team name
-    if (
-      !name ||
-      typeof name !== 'string' ||
-      name.trim().length === 0
-    ) {
-      return NextResponse.json(
-        { error: 'Team name is required' },
-        { status: 400 }
-      );
-    }
-
-    // Create team
     const { data: team, error } = await supabase
       .from('teams')
       .insert({
-        organization_id: orgContext.organizationId,
-        name: name.trim(),
-        description: description?.trim() || null,
-        created_by: user.userId,
-      })
-      .select(`
-        id,
+        organization_id: organizationId,
         name,
         description,
-        created_by,
-        created_at,
-        updated_at
-      `)
+        created_by: user.userId,
+      })
+      .select('*')
       .single();
 
     if (error) {
+      if (error.code === '23505') {
+        return NextResponse.json(
+          { error: 'A team with this name already exists' },
+          { status: 400 },
+        );
+      }
       console.error('Failed to create team:', error);
-
-      return NextResponse.json(
-        { error: 'Failed to create team' },
-        { status: 500 }
-      );
+      return NextResponse.json({ error: 'Failed to create team' }, { status: 500 });
     }
 
     return NextResponse.json(team, { status: 201 });
   } catch (err) {
     console.error('Teams POST error:', err);
-
-    return NextResponse.json(
-      { error: 'Internal server error' },
-      { status: 500 }
-    );
+    return NextResponse.json({ error: 'Internal server error' }, { status: 500 });
   }
 }

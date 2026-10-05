@@ -120,7 +120,7 @@ function PendingAssignmentContent() {
           </div>
           <p className="mt-4 text-base font-medium text-slate-900">All assignments confirmed</p>
           <p className="mt-1 text-sm text-slate-500">
-            Tasks that need assignment review will appear here.
+            Commitments that need assignment review will appear here.
           </p>
         </div>
       ) : (

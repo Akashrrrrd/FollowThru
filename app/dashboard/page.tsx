@@ -28,6 +28,7 @@ import { LoadingTaskCards } from '@/components/loading';
 import { ProtectedRoute } from '@/components/protected-route';
 
 import { useAuthFetch } from '@/hooks/use-auth-fetch';
+import { useRealtimeCommitments } from '@/hooks/use-realtime-commitments';
 import { isOverdue } from '@/lib/lifecycle';
 
 import type { Task, TaskStatus } from '@/lib/types';
@@ -524,7 +525,35 @@ function DashboardContent() {
   const [historyLoading, setHistoryLoading] = useState(true);
   const [historyError, setHistoryError] = useState<string | null>(null);
 
-  /* ------------------------------- Data load ------------------------------ */
+  /* ------------------------------- Realtime updates ------------------------------ */
+
+  // Subscribe to commitment changes and update task list
+  useRealtimeCommitments(useCallback((event, updatedCommitment) => {
+    setTasks((prevTasks) => {
+      const idx = prevTasks.findIndex((t) => t.id === updatedCommitment.id);
+      if (event === 'delete') {
+        // Remove deleted commitment
+        if (idx >= 0) {
+          return prevTasks.filter((t) => t.id !== updatedCommitment.id);
+        }
+        return prevTasks;
+      } else if (event === 'insert') {
+        // Add new commitment if not already present
+        if (idx === -1) {
+          return [...prevTasks, updatedCommitment];
+        }
+        return prevTasks;
+      } else {
+        // Update existing commitment
+        if (idx >= 0) {
+          const updated = [...prevTasks];
+          updated[idx] = updatedCommitment;
+          return updated;
+        }
+        return prevTasks;
+      }
+    });
+  }, []));
 
   const fetchTasks = useCallback(async () => {
     setLoading(true);
@@ -545,7 +574,7 @@ function DashboardContent() {
       const data = await res.json();
 
       if (!res.ok) {
-        setError(data.error || 'Failed to load tasks.');
+        setError(data.error || 'Failed to load commitments.');
         setLoading(false);
         return;
       }
@@ -996,7 +1025,7 @@ function DashboardContent() {
           <PageError message={error} />
         ) : tasks.length === 0 ? (
           <EmptyState
-            title="No tasks yet"
+            title="No commitments yet"
             description="Process a meeting transcript to extract action items."
             action={
               <Link href="/new">

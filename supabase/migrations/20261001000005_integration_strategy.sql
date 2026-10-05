@@ -56,28 +56,32 @@ ALTER TABLE public.nudges ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.meeting_bot_interactions ENABLE ROW LEVEL SECURITY;
 
 -- RLS Policies
+DROP POLICY IF EXISTS "Users can view their integration clients" ON public.integration_clients;
 CREATE POLICY "Users can view their integration clients"
   ON public.integration_clients FOR SELECT
   USING (user_id = auth.uid());
 
+DROP POLICY IF EXISTS "Users can insert integration clients" ON public.integration_clients;
 CREATE POLICY "Users can insert integration clients"
   ON public.integration_clients FOR INSERT
   WITH CHECK (user_id = auth.uid());
 
+DROP POLICY IF EXISTS "Users can view their sync jobs" ON public.sync_jobs;
 CREATE POLICY "Users can view their sync jobs"
   ON public.sync_jobs FOR SELECT
   USING (user_id = auth.uid());
 
+DROP POLICY IF EXISTS "Users can view their nudges" ON public.nudges;
 CREATE POLICY "Users can view their nudges"
   ON public.nudges FOR SELECT
   USING (user_id = auth.uid());
 
 -- Indexes
-CREATE INDEX idx_integration_clients_user_id ON public.integration_clients(user_id);
-CREATE INDEX idx_integration_clients_provider ON public.integration_clients(provider);
-CREATE INDEX idx_sync_jobs_user_id ON public.sync_jobs(user_id);
-CREATE INDEX idx_sync_jobs_status ON public.sync_jobs(status);
-CREATE INDEX idx_nudges_task_id ON public.nudges(task_id);
-CREATE INDEX idx_nudges_user_id ON public.nudges(user_id);
-CREATE INDEX idx_nudges_sent_at ON public.nudges(sent_at);
-CREATE INDEX idx_meeting_bot_meeting_id ON public.meeting_bot_interactions(meeting_id);
+CREATE INDEX IF NOT EXISTS idx_integration_clients_user_id ON public.integration_clients(user_id);
+CREATE INDEX IF NOT EXISTS idx_integration_clients_provider ON public.integration_clients(provider);
+CREATE INDEX IF NOT EXISTS idx_sync_jobs_user_id ON public.sync_jobs(user_id);
+CREATE INDEX IF NOT EXISTS idx_sync_jobs_status ON public.sync_jobs(status);
+CREATE INDEX IF NOT EXISTS idx_nudges_task_id ON public.nudges(task_id);
+CREATE INDEX IF NOT EXISTS idx_nudges_user_id ON public.nudges(user_id);
+CREATE INDEX IF NOT EXISTS idx_nudges_sent_at ON public.nudges(sent_at);
+CREATE INDEX IF NOT EXISTS idx_meeting_bot_meeting_id ON public.meeting_bot_interactions(meeting_id);

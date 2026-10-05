@@ -120,6 +120,7 @@ export class TeamInvitationService {
    *   organization, so accepting adds them to the organization (as a
    *   regular member) first. The invitation was issued by an org manager,
    *   so the token itself is the authorization.
+   * - After accepting, ensure user is added to the default team.
    */
   async acceptInvitation(
     token: string,
@@ -156,20 +157,32 @@ export class TeamInvitationService {
 
     if (!orgMember) {
       console.log(`[acceptInvitation] User ${userId} not in org ${invitation.organization_id}, adding...`);
-      const { error: joinError } = await this.supabase
+      const { data: insertedMember, error: joinError } = await this.supabase
         .from('organization_members')
         .insert({
           user_id: userId,
           organization_id: invitation.organization_id,
           role: 'member',
-        });
+        })
+        .select();
 
       // 23505 = already a member (race) -> fine
       if (joinError && joinError.code !== '23505') {
         console.error(`[acceptInvitation] Failed to join org:`, joinError);
         throw new Error(`Failed to join organization: ${joinError.message}`);
       }
-      console.log(`[acceptInvitation] Successfully added user ${userId} to org ${invitation.organization_id}`);
+      
+      if (insertedMember?.length) {
+        console.log(`[acceptInvitation] Successfully added user ${userId} to org ${invitation.organization_id}`);
+      } else if (joinError?.code === '23505') {
+        console.log(`[acceptInvitation] User ${userId} already in org ${invitation.organization_id} (duplicate key)`);
+      }
+
+      // Small delay to allow database write to propagate through RLS layer.
+      // This is minimal (10ms) and only necessary if insert was just performed.
+      if (insertedMember?.length) {
+        await new Promise(resolve => setTimeout(resolve, 10));
+      }
     } else {
       console.log(`[acceptInvitation] User ${userId} already in org ${invitation.organization_id}`);
     }
@@ -187,20 +200,29 @@ export class TeamInvitationService {
     }
 
     if (!existingMember) {
-      const { error: insertError } = await this.supabase
+      console.log(`[acceptInvitation] User ${userId} not yet in team ${invitation.team_id}, inserting...`);
+      const { data: insertData, error: insertError } = await this.supabase
         .from('team_members')
         .insert({
           team_id: invitation.team_id,
           user_id: userId,
           role: invitation.role,
-        });
+        })
+        .select();
 
       if (insertError && insertError.code !== '23505') {
         console.error(`[acceptInvitation] Failed to add user ${userId} to team ${invitation.team_id}:`, insertError);
+        console.error(`[acceptInvitation] Insert error code: ${insertError.code}`);
+        console.error(`[acceptInvitation] Insert error details:`, JSON.stringify(insertError, null, 2));
         throw new Error(`Failed to add user to team: ${insertError.message}`);
       }
       
-      console.log(`[acceptInvitation] Successfully added user ${userId} to team ${invitation.team_id} with role ${invitation.role}`);
+      if (insertError && insertError.code === '23505') {
+        console.log(`[acceptInvitation] User ${userId} already in team ${invitation.team_id} (duplicate key error - race condition)`);
+      } else {
+        console.log(`[acceptInvitation] Successfully added user ${userId} to team ${invitation.team_id} with role ${invitation.role}`);
+        console.log(`[acceptInvitation] Insert result:`, JSON.stringify(insertData, null, 2));
+      }
     } else {
       console.log(`[acceptInvitation] User ${userId} already a member of team ${invitation.team_id}`);
     }

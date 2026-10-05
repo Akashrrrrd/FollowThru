@@ -11,6 +11,8 @@ import { CompletionNotificationService } from '@/lib/completion-notification-ser
 
 import { BidirectionalSyncService } from '@/lib/integrations/bidirectional-sync';
 
+import { handleTaskAssignment, handleStatusChangeNotification, handleDueDateChangeNotification } from '@/lib/notification-service';
+
 import type { TaskStatus } from '@/lib/types';
 
 export const dynamic = 'force-dynamic';
@@ -94,7 +96,7 @@ export async function PATCH(
       console.error('[PATCH] Task exists with different user?', otherUserTask?.user_id);
       
       return NextResponse.json(
-        { error: 'Task not found.' },
+        { error: 'Commitment not found.' },
         { status: 404 },
       );
     }
@@ -220,7 +222,7 @@ export async function PATCH(
 
         if (assignedUserError || !assignedUserOrg) {
           return NextResponse.json(
-            { error: 'Cannot assign task to user from different organization.' },
+            { error: 'Cannot assign commitment to user from different organization.' },
             { status: 400 },
           );
         }
@@ -237,7 +239,7 @@ export async function PATCH(
 
           if (membershipError || !teamMembership) {
             return NextResponse.json(
-              { error: 'Cannot assign task to user who is not a member of the task\'s team.' },
+              { error: 'Cannot assign commitment to user who is not a member of the commitment\'s team.' },
               { status: 400 },
             );
           }
@@ -316,7 +318,7 @@ export async function PATCH(
 
       return NextResponse.json(
 
-        { error: 'Failed to update task.' },
+        { error: 'Failed to update commitment.' },
 
         { status: 500 },
 
@@ -325,6 +327,95 @@ export async function PATCH(
     }
     
     console.log('[PATCH] Task updated successfully:', { id, status: task.status, updates });
+
+    // Trigger assignment notification if assigned_to_user_id changed
+    if (assigned_to_user_id !== undefined && assigned_to_user_id !== existing.assigned_to_user_id) {
+      try {
+        // Get full task data for notification
+        const { data: fullTask } = await supabase
+          .from('tasks')
+          .select('id, description, owner, due_date, meeting_id, team_id')
+          .eq('id', id)
+          .single();
+
+        if (fullTask) {
+          await handleTaskAssignment(
+            supabase,
+            id,
+            existing.assigned_to_user_id,
+            assigned_to_user_id,
+            {
+              title: task.description || 'Unnamed commitment',
+              description: fullTask.description || '',
+              owner: task.owner || 'Unassigned',
+              dueDate: fullTask.due_date || undefined,
+              organizationId: orgContext.organizationId,
+              teamId: fullTask.team_id || undefined,
+              meetingId: fullTask.meeting_id || undefined,
+            },
+            // Get user email for notification context (optional)
+            undefined // Will be populated if needed in notification service
+          );
+        }
+      } catch (err) {
+        console.error('Error handling task assignment notification:', err);
+        // Don't fail the task update if notification fails
+      }
+    }
+
+    // Trigger status change notification if status changed
+    if (status !== undefined && status !== existing.status) {
+      try {
+        const { data: fullTask } = await supabase
+          .from('tasks')
+          .select('id, description, assigned_to_user_id, owner_user_id')
+          .eq('id', id)
+          .single();
+
+        if (fullTask) {
+          await handleStatusChangeNotification(supabase, {
+            taskId: id,
+            taskDescription: task.description || 'Unnamed commitment',
+            organizationId: orgContext.organizationId,
+            teamId: existing.team_id,
+            oldStatus: existing.status,
+            newStatus: status,
+            assignedToUserId: fullTask.assigned_to_user_id,
+            ownerUserId: fullTask.owner_user_id || user.userId,
+          });
+        }
+      } catch (err) {
+        console.error('Error handling status change notification:', err);
+        // Don't fail the task update if notification fails
+      }
+    }
+
+    // Trigger due date change notification if due_date changed
+    if (due_date !== undefined && due_date !== existing.due_date) {
+      try {
+        const { data: fullTask } = await supabase
+          .from('tasks')
+          .select('id, description, assigned_to_user_id, owner_user_id')
+          .eq('id', id)
+          .single();
+
+        if (fullTask) {
+          await handleDueDateChangeNotification(supabase, {
+            taskId: id,
+            taskDescription: task.description || 'Unnamed commitment',
+            organizationId: orgContext.organizationId,
+            teamId: existing.team_id || undefined,
+            oldDueDate: existing.due_date,
+            newDueDate: due_date || undefined,
+            assignedToUserId: fullTask.assigned_to_user_id,
+            ownerUserId: fullTask.owner_user_id || user.userId,
+          });
+        }
+      } catch (err) {
+        console.error('Error handling due date change notification:', err);
+        // Don't fail the task update if notification fails
+      }
+    }
 
     // Auto-create completion notification if status changed to 'completed'
     let completionNotificationId: string | null = null;

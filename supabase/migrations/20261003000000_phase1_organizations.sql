@@ -175,11 +175,15 @@ UPDATE public.meetings m
 SET organization_id = (
   SELECT om.organization_id 
   FROM public.organization_members om
-  WHERE om.user_id = m.user_id::uuid
+  WHERE om.user_id = CASE 
+    WHEN m.user_id::text ~ '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$' 
+    THEN m.user_id::uuid 
+    ELSE NULL 
+  END
   LIMIT 1
 )
 WHERE m.organization_id IS NULL
-AND m.user_id != 'demo-user';
+AND (m.user_id::text ~ '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$' OR m.user_id::text = 'demo-user');
 
 -- Backfill organization_id in tasks
 -- For each task, inherit from parent meeting
@@ -237,6 +241,10 @@ DROP POLICY IF EXISTS "select_own_meetings" ON public.meetings;
 DROP POLICY IF EXISTS "insert_own_meetings" ON public.meetings;
 DROP POLICY IF EXISTS "update_own_meetings" ON public.meetings;
 DROP POLICY IF EXISTS "delete_own_meetings" ON public.meetings;
+DROP POLICY IF EXISTS "select_org_meetings" ON public.meetings;
+DROP POLICY IF EXISTS "insert_org_meetings" ON public.meetings;
+DROP POLICY IF EXISTS "update_org_meetings" ON public.meetings;
+DROP POLICY IF EXISTS "delete_org_meetings" ON public.meetings;
 
 -- New org-aware policies on meetings
 -- SELECT: user's own meetings in their org, OR any meeting in their org
@@ -291,6 +299,10 @@ DROP POLICY IF EXISTS "select_own_tasks" ON public.tasks;
 DROP POLICY IF EXISTS "insert_own_tasks" ON public.tasks;
 DROP POLICY IF EXISTS "update_own_tasks" ON public.tasks;
 DROP POLICY IF EXISTS "delete_own_tasks" ON public.tasks;
+DROP POLICY IF EXISTS "select_org_tasks" ON public.tasks;
+DROP POLICY IF EXISTS "insert_org_tasks" ON public.tasks;
+DROP POLICY IF EXISTS "update_org_tasks" ON public.tasks;
+DROP POLICY IF EXISTS "delete_org_tasks" ON public.tasks;
 
 -- New org-aware policies on tasks
 -- SELECT: task in user's org

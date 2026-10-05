@@ -87,7 +87,7 @@ Dear ${responsiblePerson.name},
 
 We wanted to confirm that the following commitment has been completed:
 
-**Task:** ${taskDescription}
+**Commitment:** ${taskDescription}
 **Owner:** ${owner}
 **Completion Date:** ${completionDate}
 

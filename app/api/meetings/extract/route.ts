@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createServerClient, getUserFromRequest } from '@/lib/supabase-server';
 import { getUserOrganizationContext } from '@/lib/organization-context';
+import { isManagerInOrganization } from '@/lib/team-authorization';
 import { callGroqForExtraction } from '@/lib/groq';
 import { resolveDateExpression, isDependencyExpression } from '@/lib/date-resolver';
 import { linkCommitmentsToPrevious, saveContinuityEvents } from '@/lib/commitment-linker';
@@ -103,6 +104,13 @@ export async function POST(req: NextRequest) {
         { status: 403 },
       );
     }
+
+    // Permission check: Only managers, owners, or team leads can create meetings.
+    // For now, we allow any org member to create (managers + regular members).
+    // Future: restrict to managers/team_leads only by checking:
+    // const canCreate = await isManagerInOrganization(supabase, user.userId, orgContext.organizationId);
+    // For MVP, allow any org member (they can create meetings for their team).
+
 
     const { data: meeting, error: meetingError } = await supabase
       .from('meetings')

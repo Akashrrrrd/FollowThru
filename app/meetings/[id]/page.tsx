@@ -126,7 +126,7 @@ function MeetingDetailContent({ params }: { params: { id: string } }) {
     return data.message;
   };
 
-  const handleAddTask = async (e: React.FormEvent) => {
+  const handleAddCommitment = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!addDescription.trim() || !addOwner.trim()) { setAddError('Description and owner are required.'); return; }
     setAddError(null);
@@ -134,10 +134,10 @@ function MeetingDetailContent({ params }: { params: { id: string } }) {
     try {
       const res = await authFetch('/api/tasks', { method: 'POST', body: JSON.stringify({ meeting_id: id, description: addDescription.trim(), owner: addOwner.trim(), due_date: addDueDate || null }) });
       const data = await res.json();
-      if (!res.ok) { setAddError(data.error || 'Failed to add task.'); setAddLoading(false); return; }
+      if (!res.ok) { setAddError(data.error || 'Failed to add commitment.'); setAddLoading(false); return; }
       setTasks((prev) => [...prev, data.task]);
       setAddDescription(''); setAddOwner(''); setAddDueDate(''); setShowAddForm(false); setAddLoading(false);
-    } catch (err) { console.error('Add task error:', err); setAddError('Network error. Please try again.'); setAddLoading(false); }
+    } catch (err) { console.error('Add commitment error:', err); setAddError('Network error. Please try again.'); setAddLoading(false); }
   };
 
   if (loading) return <PageLoading />;
@@ -151,27 +151,27 @@ function MeetingDetailContent({ params }: { params: { id: string } }) {
       </Button>
       <div className="mb-8">
         <h1 className="text-2xl font-bold text-gray-900">{meeting.title}</h1>
-        <p className="mt-1 text-sm text-gray-500">{formatDate(meeting.created_at)} — {doneTasks}/{totalTasks} tasks done</p>
+        <p className="mt-1 text-sm text-gray-500">{formatDate(meeting.created_at)} — {doneTasks}/{totalTasks} commitments done</p>
       </div>
 
       <div className="mb-8">
         <div className="mb-4 flex items-center justify-between border-b-2 border-gray-300 pb-3">
-          <h2 className="text-sm font-bold uppercase tracking-wide text-gray-900">Action Items (This Meeting)</h2>
+          <h2 className="text-sm font-bold uppercase tracking-wide text-gray-900">Commitments (This Meeting)</h2>
           <Button size="sm" variant="outline" onClick={() => setShowAddForm((prev) => !prev)} className="border-gray-200 text-gray-600 hover:text-gray-900">
-            {showAddForm ? <><X className="mr-1 h-4 w-4" />Cancel</> : <><Plus className="mr-1 h-4 w-4" />Add task manually</>}
+            {showAddForm ? <><X className="mr-1 h-4 w-4" />Cancel</> : <><Plus className="mr-1 h-4 w-4" />Add commitment manually</>}
           </Button>
         </div>
 
         {showAddForm && (
-          <form onSubmit={handleAddTask} className="mb-4 space-y-3 rounded-lg border border-gray-200 bg-white p-5 shadow-sm">
-            <Input value={addDescription} onChange={(e) => setAddDescription(e.target.value)} placeholder="Task description" className="border-gray-200" />
+          <form onSubmit={handleAddCommitment} className="mb-4 space-y-3 rounded-lg border border-gray-200 bg-white p-5 shadow-sm">
+            <Input value={addDescription} onChange={(e) => setAddDescription(e.target.value)} placeholder="Commitment description" className="border-gray-200" />
             <div className="flex gap-2">
               <Input value={addOwner} onChange={(e) => setAddOwner(e.target.value)} placeholder="Owner (e.g. John)" className="border-gray-200" />
               <Input type="date" value={addDueDate} onChange={(e) => setAddDueDate(e.target.value)} className="border-gray-200" />
             </div>
             {addError && <p className="text-sm text-red-600">{addError}</p>}
             <Button type="submit" disabled={addLoading} className="bg-blue-600 text-white hover:bg-blue-700">
-              {addLoading ? <Loader2 className="mr-1 h-4 w-4 animate-spin" /> : <Plus className="mr-1 h-4 w-4" />}Add Task
+              {addLoading ? <Loader2 className="mr-1 h-4 w-4 animate-spin" /> : <Plus className="mr-1 h-4 w-4" />}Add Commitment
             </Button>
           </form>
         )}

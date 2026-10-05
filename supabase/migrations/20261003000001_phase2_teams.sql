@@ -73,12 +73,13 @@ CREATE TABLE IF NOT EXISTS public.team_members (
 ALTER TABLE public.team_members ENABLE ROW LEVEL SECURITY;
 
 -- RLS: Users can see team members for teams in their organization
+-- Two-step check: first verify user is in the organization, then check team belongs to that org
+-- This avoids race conditions where the nested subquery may not see newly-inserted org_members
 CREATE POLICY "view_team_members" ON public.team_members FOR SELECT
   USING (
-    EXISTS (
-      SELECT 1 FROM public.teams t
-      WHERE t.id = team_members.team_id
-      AND t.organization_id IN (
+    team_id IN (
+      SELECT t.id FROM public.teams t
+      WHERE t.organization_id IN (
         SELECT om.organization_id
         FROM public.organization_members om
         WHERE om.user_id = auth.uid()
@@ -130,17 +131,14 @@ SELECT
   o.id,
   'General',
   'Default team for organization',
-  om.user_id,
+  (SELECT om2.user_id
+   FROM public.organization_members om2
+   WHERE om2.organization_id = o.id
+   AND om2.role = 'owner'
+   LIMIT 1),
   CURRENT_TIMESTAMP,
   CURRENT_TIMESTAMP
 FROM public.organizations o
-CROSS JOIN (
-  SELECT om2.user_id
-  FROM public.organization_members om2
-  WHERE om2.organization_id = o.id
-  AND om2.role = 'owner'
-  LIMIT 1
-) om
 WHERE NOT EXISTS (
   SELECT 1 FROM public.teams t
   WHERE t.organization_id = o.id

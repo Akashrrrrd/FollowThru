@@ -238,3 +238,88 @@ export function createOverdueReminderEmail(taskDescription: string, dueDate: str
 </html>
   `;
 }
+
+
+/**
+ * Phase 4: Escalation email template
+ * Sent to team leads/managers when a commitment is overdue
+ */
+export function createEscalationEmail(
+  taskDescription: string,
+  assignedTo: string,
+  dueDate: string,
+  hoursOverdue: number,
+  recipientRole: 'team_lead' | 'manager' | 'owner',
+  customMessage?: string
+): string {
+  const dateStr = new Date(dueDate).toLocaleDateString('en-US', {
+    weekday: 'short',
+    month: 'short',
+    day: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+  });
+
+  const roleTitle = recipientRole === 'team_lead' ? 'Team Lead' : recipientRole === 'owner' ? 'Owner' : 'Manager';
+  const overdueDuration = hoursOverdue < 24 ? `${hoursOverdue}h` : `${Math.floor(hoursOverdue / 24)}d`;
+
+  return `
+<!DOCTYPE html>
+<html>
+  <head>
+    <meta charset="UTF-8">
+    <title>FollowThru Escalation</title>
+    <style>
+      body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; color: #333; }
+      .container { max-width: 600px; margin: 0 auto; padding: 20px; }
+      .header { background: linear-gradient(135deg, #ff6b6b 0%, #ee5a6f 100%); color: white; padding: 20px; border-radius: 8px 8px 0 0; }
+      .body { background: #f9fafb; padding: 20px; border-radius: 0 0 8px 8px; }
+      .alert-box { background: #ffe0e0; border-left: 4px solid #ff6b6b; padding: 15px; margin: 15px 0; }
+      .commitment-box { background: white; padding: 15px; border-left: 4px solid #ff6b6b; margin: 15px 0; }
+      .status-badge { background: #ff6b6b; color: white; padding: 6px 12px; border-radius: 20px; font-size: 12px; font-weight: bold; }
+      .button { background: #ff6b6b; color: white; padding: 10px 20px; text-decoration: none; border-radius: 4px; display: inline-block; margin-top: 15px; }
+      .footer { color: #666; font-size: 12px; margin-top: 20px; }
+      .detail-row { margin: 8px 0; }
+      .detail-label { font-weight: bold; color: #555; }
+    </style>
+  </head>
+  <body>
+    <div class="container">
+      <div class="header">
+        <h2>🚨 Commitment Escalation</h2>
+      </div>
+      <div class="body">
+        <p>Hi ${roleTitle},</p>
+
+        <div class="alert-box">
+          <p><strong>A team commitment is now overdue and requires your attention.</strong></p>
+        </div>
+
+        <div class="commitment-box">
+          <p><strong>${taskDescription}</strong></p>
+          <div class="detail-row">
+            <span class="status-badge">Overdue ${overdueDuration}</span>
+          </div>
+          <div class="detail-row">
+            <span class="detail-label">Assigned To:</span> ${assignedTo}
+          </div>
+          <div class="detail-row">
+            <span class="detail-label">Was Due:</span> ${dateStr}
+          </div>
+        </div>
+
+        ${customMessage ? `<div class="commitment-box"><p>${customMessage}</p></div>` : ''}
+
+        <p>Please follow up with the assignee to understand the status and help resolve any blockers.</p>
+
+        <a href="https://followthru.app/dashboard" class="button">Review Commitment</a>
+
+        <div class="footer">
+          <p>This is an automated escalation from FollowThru's commitment tracking system.</p>
+        </div>
+      </div>
+    </div>
+  </body>
+</html>
+  `;
+}

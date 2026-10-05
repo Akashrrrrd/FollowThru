@@ -1,227 +1,86 @@
-/*
-# Phase 2 Hardening - Validation Checks
+-- Phase 2 Validation Checks
+-- Final validation that all Phase 2 migrations completed successfully
 
-This migration provides SQL-based validation checks for Phase 2 hardening.
-Run this AFTER all hardening migrations to verify:
+-- Check 1: Teams table exists and has data
+DO $$
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name = 'teams') THEN
+    RAISE EXCEPTION 'Phase 2 ERROR: teams table not created';
+  END IF;
+  
+  RAISE NOTICE 'Phase 2 validation: teams table exists';
+END $$;
 
-1. All NULL organization_id records are backfilled
-2. All NOT NULL constraints are in place
-3. All triggers are created
-4. All RLS policies are set correctly
-5. No data integrity issues
+-- Check 2: Team members table exists
+DO $$
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name = 'team_members') THEN
+    RAISE EXCEPTION 'Phase 2 ERROR: team_members table not created';
+  END IF;
+  
+  RAISE NOTICE 'Phase 2 validation: team_members table exists';
+END $$;
 
-This migration is IDEMPOTENT and SAFE TO RE-RUN.
-It only performs validation (no modifications).
-
-To view validation results:
-- Check PostgreSQL NOTICE messages during migration
-- Query validation tables created in this migration
-*/
-
--- ============================================================================
--- PART 1: CREATE VALIDATION REPORT TABLE
--- ============================================================================
-
-CREATE TABLE IF NOT EXISTS public.phase2_validation_report (
-  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-  check_name varchar(255) NOT NULL,
-  check_category varchar(100) NOT NULL,
-  status varchar(50) NOT NULL,
-  details text,
-  count_value integer,
-  created_at timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP
-);
-
--- Drop previous runs for clean report
-DELETE FROM public.phase2_validation_report
-WHERE created_at < NOW() - INTERVAL '1 day';
-
--- ============================================================================
--- PART 2: VALIDATION CHECKS
--- ============================================================================
-
+-- Check 3: All organizations have default teams
 DO $$
 DECLARE
-  null_count_meetings integer;
-  null_count_tasks integer;
-  trigger_count integer;
-  policy_count integer;
+  orgs_without_teams int;
 BEGIN
-  -- Check 1: No NULL organization_id in meetings
-  SELECT COUNT(*) INTO null_count_meetings
-  FROM public.meetings WHERE organization_id IS NULL;
-  
-  INSERT INTO public.phase2_validation_report (check_name, check_category, status, details, count_value)
-  VALUES (
-    'No NULL organization_id in meetings',
-    'Data Integrity',
-    CASE WHEN null_count_meetings = 0 THEN 'PASS' ELSE 'FAIL' END,
-    CASE WHEN null_count_meetings = 0 
-      THEN 'All meetings have organization_id'
-      ELSE 'Found ' || null_count_meetings || ' meetings with NULL organization_id'
-    END,
-    null_count_meetings
-  );
-
-  -- Check 2: No NULL organization_id in tasks
-  SELECT COUNT(*) INTO null_count_tasks
-  FROM public.tasks WHERE organization_id IS NULL;
-  
-  INSERT INTO public.phase2_validation_report (check_name, check_category, status, details, count_value)
-  VALUES (
-    'No NULL organization_id in tasks',
-    'Data Integrity',
-    CASE WHEN null_count_tasks = 0 THEN 'PASS' ELSE 'FAIL' END,
-    CASE WHEN null_count_tasks = 0 
-      THEN 'All tasks have organization_id'
-      ELSE 'Found ' || null_count_tasks || ' tasks with NULL organization_id'
-    END,
-    null_count_tasks
-  );
-
-  -- Check 3: Triggers exist
-  SELECT COUNT(*) INTO trigger_count
-  FROM information_schema.triggers
-  WHERE trigger_schema = 'public'
-  AND trigger_name IN (
-    'tasks_assignment_org_validation',
-    'tasks_team_org_consistency',
-    'tasks_team_assignment',
-    'organization_members_cleanup_teams'
+  SELECT COUNT(*)  INTO orgs_without_teams FROM public.organizations o
+  WHERE NOT EXISTS (
+    SELECT 1 FROM public.teams t
+    WHERE t.organization_id = o.id
+    AND t.name = 'General'
   );
   
-  INSERT INTO public.phase2_validation_report (check_name, check_category, status, details, count_value)
-  VALUES (
-    'All validation triggers created',
-    'Database Triggers',
-    CASE WHEN trigger_count = 4 THEN 'PASS' ELSE 'FAIL' END,
-    'Found ' || trigger_count || ' of 4 expected triggers',
-    trigger_count
-  );
-
-  -- Check 4: RLS policies exist
-  SELECT COUNT(*) INTO policy_count
-  FROM pg_policies
-  WHERE schemaname = 'public'
-  AND tablename IN ('organizations', 'organization_members', 'meetings', 'tasks', 'teams', 'team_members')
-  AND policyname LIKE '%org%' OR policyname LIKE '%team%';
+  IF orgs_without_teams > 0 THEN
+    RAISE EXCEPTION 'Phase 2 ERROR: % organizations missing default teams', orgs_without_teams;
+  END IF;
   
-  INSERT INTO public.phase2_validation_report (check_name, check_category, status, details, count_value)
-  VALUES (
-    'RLS policies configured',
-    'RLS Policies',
-    CASE WHEN policy_count >= 6 THEN 'PASS' ELSE 'WARN' END,
-    'Found ' || policy_count || ' org/team-aware policies',
-    policy_count
-  );
-
-  -- Log completion
-  RAISE NOTICE 'Phase 2 Hardening Validation Complete';
-  RAISE NOTICE 'Meetings with NULL organization_id: %', null_count_meetings;
-  RAISE NOTICE 'Tasks with NULL organization_id: %', null_count_tasks;
-  RAISE NOTICE 'Validation Triggers: %', trigger_count;
-  RAISE NOTICE 'RLS Policies: %', policy_count;
-  
+  RAISE NOTICE 'Phase 2 validation: all organizations have default teams';
 END $$;
 
--- ============================================================================
--- PART 3: VIEW VALIDATION RESULTS
--- ============================================================================
-
--- Summary
-SELECT 
-  check_category,
-  COUNT(*) as total_checks,
-  SUM(CASE WHEN status = 'PASS' THEN 1 ELSE 0 END) as passed,
-  SUM(CASE WHEN status = 'FAIL' THEN 1 ELSE 0 END) as failed,
-  SUM(CASE WHEN status = 'WARN' THEN 1 ELSE 0 END) as warnings
-FROM public.phase2_validation_report
-GROUP BY check_category
-ORDER BY check_category;
-
--- ============================================================================
--- PART 4: CONSTRAINT VERIFICATION
--- ============================================================================
-
-DO $$
-BEGIN
-  -- Verify NOT NULL constraints exist
-  PERFORM 1 FROM information_schema.columns
-  WHERE table_schema = 'public'
-  AND table_name = 'meetings'
-  AND column_name = 'organization_id'
-  AND is_nullable = 'NO';
-  
-  IF NOT FOUND THEN
-    RAISE NOTICE 'WARNING: meetings.organization_id is nullable (should be NOT NULL)';
-  ELSE
-    RAISE NOTICE 'OK: meetings.organization_id is NOT NULL';
-  END IF;
-
-  PERFORM 1 FROM information_schema.columns
-  WHERE table_schema = 'public'
-  AND table_name = 'tasks'
-  AND column_name = 'organization_id'
-  AND is_nullable = 'NO';
-  
-  IF NOT FOUND THEN
-    RAISE NOTICE 'WARNING: tasks.organization_id is nullable (should be NOT NULL)';
-  ELSE
-    RAISE NOTICE 'OK: tasks.organization_id is NOT NULL';
-  END IF;
-
-END $$;
-
--- ============================================================================
--- PART 5: SAMPLE DATA INTEGRITY CHECKS
--- ============================================================================
-
+-- Check 4: All organization members have team memberships
 DO $$
 DECLARE
-  orphaned_tasks_count integer;
-  orphaned_meetings_count integer;
-  mismatched_team_org_count integer;
+  users_without_teams int;
 BEGIN
-  -- Check for orphaned tasks (task.meeting_id exists but meeting doesn't)
-  SELECT COUNT(*) INTO orphaned_tasks_count
-  FROM public.tasks t
-  WHERE t.meeting_id IS NOT NULL
-  AND NOT EXISTS (SELECT 1 FROM public.meetings m WHERE m.id = t.meeting_id);
-  
-  IF orphaned_tasks_count > 0 THEN
-    RAISE NOTICE 'WARNING: Found % orphaned tasks', orphaned_tasks_count;
-  ELSE
-    RAISE NOTICE 'OK: No orphaned tasks found';
-  END IF;
-
-  -- Check for mismatched team_id and organization_id
-  SELECT COUNT(*) INTO mismatched_team_org_count
-  FROM public.tasks t
-  WHERE t.team_id IS NOT NULL
-  AND NOT EXISTS (
-    SELECT 1 FROM public.teams te
-    WHERE te.id = t.team_id
-    AND te.organization_id = t.organization_id
+  SELECT COUNT(*) INTO users_without_teams FROM public.organization_members om
+  WHERE NOT EXISTS (
+    SELECT 1 FROM public.team_members tm
+    WHERE tm.user_id = om.user_id
+    AND tm.team_id IN (
+      SELECT t.id FROM public.teams t
+      WHERE t.organization_id = om.organization_id
+    )
   );
   
-  IF mismatched_team_org_count > 0 THEN
-    RAISE NOTICE 'WARNING: Found % tasks with mismatched team_org_id', mismatched_team_org_count;
-  ELSE
-    RAISE NOTICE 'OK: All team assignments match org boundaries';
+  IF users_without_teams > 0 THEN
+    RAISE EXCEPTION 'Phase 2 ERROR: % users missing team memberships', users_without_teams;
   END IF;
-
+  
+  RAISE NOTICE 'Phase 2 validation: all users have team memberships';
 END $$;
 
--- ============================================================================
--- PART 6: FINAL REPORT
--- ============================================================================
+-- Check 5: user_id columns are UUID type
+DO $$
+DECLARE
+  text_cols int;
+BEGIN
+  SELECT COUNT(*) INTO text_cols FROM information_schema.columns
+  WHERE table_name IN ('meetings', 'tasks')
+  AND column_name = 'user_id'
+  AND data_type != 'uuid';
+  
+  IF text_cols > 0 THEN
+    RAISE EXCEPTION 'Phase 2 ERROR: user_id columns still text type instead of uuid';
+  END IF;
+  
+  RAISE NOTICE 'Phase 2 validation: all user_id columns are UUID type';
+END $$;
 
--- Show all validation checks
-SELECT * FROM public.phase2_validation_report
-ORDER BY created_at DESC, check_category, check_name;
-
--- ============================================================================
--- END MIGRATION - Validation Complete
--- ============================================================================
-
-</content>
+-- All Phase 2 validations passed
+DO $$
+BEGIN
+  RAISE NOTICE 'Phase 2 validation complete: all checks passed';
+END $$;

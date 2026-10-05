@@ -15,6 +15,7 @@ import {
 } from '@/components/ui/select';
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import { useAuthFetch } from '@/hooks/use-auth-fetch';
+import { useRealtimeCommitments } from '@/hooks/use-realtime-commitments';
 import { cn } from '@/lib/utils';
 
 interface TeamTaskMetrics {
@@ -56,6 +57,20 @@ function TeamLeadDashboardContent() {
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [selectedMemberId, setSelectedMemberId] = useState<string | null>(null);
+
+  /* Subscribe to commitment changes for the current team */
+  useRealtimeCommitments((event) => {
+    // On commitment changes, refresh team dashboard to get updated metrics
+    if (event === 'update' || event === 'insert' || event === 'delete') {
+      // Use a small delay to batch rapid updates
+      const timer = setTimeout(() => {
+        if (selectedTeamId) {
+          fetchDashboard();
+        }
+      }, 500);
+      return () => clearTimeout(timer);
+    }
+  });
 
   // Fetch available teams
   const fetchTeams = useCallback(async () => {

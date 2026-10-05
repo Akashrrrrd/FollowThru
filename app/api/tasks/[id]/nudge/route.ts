@@ -50,7 +50,7 @@ export async function POST(
 
       return NextResponse.json(
 
-        { error: 'Task not found.' },
+        { error: 'Commitment not found.' },
 
         { status: 404 },
 

@@ -11,9 +11,15 @@
 -- 2. Go to Supabase Dashboard > Authentication > Users
 -- 3. Copy your user's UUID and replace 'DEMO_USER_ID_HERE' below
 
+-- Skip this migration if the placeholder has not been replaced
+-- Users must manually replace DEMO_USER_ID_HERE and run this migration separately
+-- This prevents production migration errors during initial setup
+
 DO $$
 DECLARE
-  demo_user_id uuid := 'DEMO_USER_ID_HERE'; -- Replace with your actual user ID
+  demo_user_id_text text := 'DEMO_USER_ID_HERE'; -- Replace with your actual user ID
+  demo_user_id uuid;
+  migration_enabled boolean := FALSE;
   meeting1_id uuid;
   meeting2_id uuid;
   task1_id uuid;
@@ -23,6 +29,20 @@ DECLARE
   task5_id uuid;
   task6_id uuid;
 BEGIN
+
+-- Check if placeholder is still present - if so, skip the migration
+IF demo_user_id_text = 'DEMO_USER_ID_HERE' THEN
+  RAISE NOTICE 'Skipping demo data migration - DEMO_USER_ID_HERE not replaced. To enable demo data, edit this migration, replace DEMO_USER_ID_HERE with your actual user ID, and run it manually.';
+  migration_enabled := FALSE;
+ELSE
+  migration_enabled := TRUE;
+  demo_user_id := demo_user_id_text::uuid;
+END IF;
+
+-- Only proceed if placeholder was replaced
+IF NOT migration_enabled THEN
+  RETURN;
+END IF;
 
 -- Verify user exists (will error if user ID is invalid)
 IF NOT EXISTS (SELECT 1 FROM auth.users WHERE id = demo_user_id) THEN

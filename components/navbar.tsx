@@ -17,6 +17,7 @@ import { cn } from '@/lib/utils';
 import { Button } from '@/components/ui/button';
 import { Avatar, AvatarFallback } from '@/components/ui/avatar';
 import { useAuth } from '@/components/auth-provider';
+import { NotificationCenter } from '@/components/notification-center';
 
 const links = [
   { href: '/dashboard', label: 'Dashboard', icon: LayoutDashboard },
@@ -45,6 +46,7 @@ export function Navbar() {
   return (
     <header className="sticky top-0 z-50 w-full border-b border-gray-200 bg-white/95 backdrop-blur">
       <div className="mx-auto flex h-14 max-w-6xl items-center justify-between px-4">
+        {/* Logo */}
         <Link href="/" className="flex items-center gap-2">
           <CheckCircle2 className="h-5 w-5 text-blue-600" />
           <span className="text-lg font-semibold tracking-tight text-gray-900">
@@ -53,51 +55,81 @@ export function Navbar() {
         </Link>
 
         <div className="flex items-center gap-2">
-          <nav className="flex items-center gap-1">
-            {links.map((link) => {
-              const Icon = link.icon;
-              const active = pathname === link.href;
-              return (
-                <Link key={link.href} href={link.href}>
+          {/* Show navigation and profile only when logged in */}
+          {user ? (
+            <>
+              {/* Navigation Links */}
+              <nav className="flex items-center gap-1">
+                {links.map((link) => {
+                  const Icon = link.icon;
+                  const active = pathname === link.href;
+                  return (
+                    <Link key={link.href} href={link.href}>
+                      <Button
+                        variant={active ? 'secondary' : 'ghost'}
+                        size="sm"
+                        className={cn(
+                          'gap-1.5 text-sm',
+                          active
+                            ? 'bg-gray-100 text-gray-900'
+                            : 'text-gray-600 hover:text-gray-900',
+                        )}
+                      >
+                        <Icon className="h-4 w-4" />
+                        <span className="hidden sm:inline">{link.label}</span>
+                      </Button>
+                    </Link>
+                  );
+                })}
+              </nav>
+
+              {/* Notifications and Profile */}
+              <div className="ml-2 flex items-center gap-1 border-l border-gray-200 pl-2">
+                {/* Notification Center */}
+                <NotificationCenter showBadge={true} maxItems={10} />
+
+                {/* Profile Avatar */}
+                <Link href="/profile">
                   <Button
-                    variant={active ? 'secondary' : 'ghost'}
+                    variant="ghost"
                     size="sm"
                     className={cn(
-                      'gap-1.5 text-sm',
-                      active
-                        ? 'bg-gray-100 text-gray-900'
-                        : 'text-gray-600 hover:text-gray-900',
+                      'gap-2',
+                      pathname === '/profile'
+                        ? 'bg-gray-100'
+                        : 'hover:bg-gray-100',
                     )}
                   >
-                    <Icon className="h-4 w-4" />
-                    <span className="hidden sm:inline">{link.label}</span>
+                    <Avatar className="h-6 w-6">
+                      <AvatarFallback className="bg-blue-600 text-xs font-semibold text-white">
+                        {getInitials(user.email || '')}
+                      </AvatarFallback>
+                    </Avatar>
+                    <span className="hidden text-xs text-gray-700 sm:inline">
+                      Profile
+                    </span>
                   </Button>
                 </Link>
-              );
-            })}
-          </nav>
-
-          {user && (
-            <div className="ml-2 flex items-center gap-2 border-l border-gray-200 pl-2">
-              <Link href="/profile">
+              </div>
+            </>
+          ) : (
+            /* Show Get Started and Try Demo buttons when logged out */
+            <div className="flex items-center gap-2">
+              <Link href="/login">
+                <Button
+                  size="sm"
+                  className="bg-blue-600 text-white hover:bg-blue-700"
+                >
+                  Get Started
+                </Button>
+              </Link>
+              <Link href="/new">
                 <Button
                   variant="ghost"
                   size="sm"
-                  className={cn(
-                    'gap-2',
-                    pathname === '/profile'
-                      ? 'bg-gray-100'
-                      : 'hover:bg-gray-100',
-                  )}
+                  className="text-gray-600 hover:text-gray-900"
                 >
-                  <Avatar className="h-6 w-6">
-                    <AvatarFallback className="bg-blue-600 text-xs font-semibold text-white">
-                      {getInitials(user.email || '')}
-                    </AvatarFallback>
-                  </Avatar>
-                  <span className="hidden text-xs text-gray-700 sm:inline">
-                    Profile
-                  </span>
+                  Try Demo
                 </Button>
               </Link>
             </div>

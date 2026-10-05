@@ -16,12 +16,24 @@ import { Textarea } from '@/components/ui/textarea';
 import { PageLoading, PageError, EmptyState } from '@/components/page-loading';
 import { ProtectedRoute } from '@/components/protected-route';
 import { useAuthFetch } from '@/hooks/use-auth-fetch';
+import { useAuth } from '@/components/auth-provider';
 import { useToast } from '@/hooks/use-toast';
+import { useRealtimeTeamMembers } from '@/hooks/use-realtime-team-members';
+import { useRealtimeTeams } from '@/hooks/use-realtime-teams';
 import type { Team, TeamMember } from '@/lib/types';
 
 interface TeamWithMembers extends Team {
   member_count?: number;
   user_role?: 'team_lead' | 'member';
+}
+
+interface MemberView extends Omit<TeamMember, 'user'> {
+  user?: {
+    id: string;
+    email?: string | null;
+    display_name?: string | null;
+    full_name?: string | null;
+  };
 }
 
 interface PendingInvitation {
@@ -32,14 +44,21 @@ interface PendingInvitation {
   token_expires_at: string;
 }
 
+function memberName(m: MemberView): string {
+  return m.user?.full_name || m.user?.display_name || m.user?.email || 'Unknown member';
+}
+
 function TeamsContent() {
   const authFetch = useAuthFetch();
   const { toast } = useToast();
+  const { user: authUser, organization } = useAuth();
 
   const [teams, setTeams] = useState<TeamWithMembers[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [isManager, setIsManager] = useState(false);
+
+  // Creating teams is an org-level action; the API still enforces it.
+  const canCreateTeam = organization?.role === 'owner' || organization?.role === 'manager';
 
   // Modal states
   const [createOpen, setCreateOpen] = useState(false);
@@ -52,9 +71,55 @@ function TeamsContent() {
   const [editForm, setEditForm] = useState({ name: '', description: '' });
   const [addMemberEmail, setAddMemberEmail] = useState('');
   const [addingMember, setAddingMember] = useState(false);
-  const [teamMembers, setTeamMembers] = useState<TeamMember[]>([]);
+
+  // Members + permissions for the currently open team (all computed by the server)
+  const [teamMembers, setTeamMembers] = useState<MemberView[]>([]);
   const [pendingInvitations, setPendingInvitations] = useState<PendingInvitation[]>([]);
   const [membersLoading, setMembersLoading] = useState(false);
+  const [canManage, setCanManage] = useState(false);
+  const [orgRole, setOrgRole] = useState<string | null>(null);
+
+  const canDeleteTeam = orgRole === 'owner' || orgRole === 'manager';
+
+  /* Subscribe to team membership changes */
+  useRealtimeTeamMembers((event, member) => {
+    // If viewing a team, refresh its members when membership changes
+    if (selectedTeam && member.team_id === selectedTeam.id) {
+      if (event === 'insert' || event === 'delete' || event === 'update') {
+        fetchTeamMembers(selectedTeam.id);
+      }
+    }
+  });
+
+  /* Subscribe to team changes (new teams created, team details updated, etc.) */
+  useRealtimeTeams((event, team) => {
+    if (event === 'insert') {
+      // New team created - add it to the list (with minimal fields)
+      const now = new Date().toISOString();
+      const newTeam: TeamWithMembers = {
+        id: team.id,
+        organization_id: team.organization_id as string,
+        name: (team.name as string) || 'New Team',
+        description: (team.description as string | undefined) || undefined,
+        created_by: '',
+        created_at: (team.created_at as string) || now,
+        updated_at: (team.updated_at as string) || now,
+      };
+      setTeams((prev) => [...prev, newTeam]);
+    } else if (event === 'update') {
+      // Team updated - refresh the teams list
+      setTeams((prev) =>
+        prev.map((t) => (t.id === team.id ? { ...t, ...team } : t))
+      );
+    } else if (event === 'delete') {
+      // Team deleted - remove it from the list
+      setTeams((prev) => prev.filter((t) => t.id !== team.id));
+      if (selectedTeam?.id === team.id) {
+        setDetailsOpen(false);
+        setSelectedTeam(null);
+      }
+    }
+  });
 
   const fetchTeams = useCallback(async () => {
     setLoading(true);
@@ -71,7 +136,6 @@ function TeamsContent() {
       }
 
       setTeams(data.teams || []);
-      setIsManager(true); // API enforces real permissions
       setLoading(false);
     } catch (err) {
       console.error('Error fetching teams:', err);
@@ -80,8 +144,9 @@ function TeamsContent() {
     }
   }, [authFetch]);
 
+  /** Returns true when members were loaded successfully. */
   const fetchTeamMembers = useCallback(
-    async (teamId: string) => {
+    async (teamId: string): Promise<boolean> => {
       setMembersLoading(true);
 
       try {
@@ -90,14 +155,18 @@ function TeamsContent() {
 
         if (!res.ok) {
           toast({ title: 'Error', description: data.error || 'Failed to load members' });
-          return;
+          return false;
         }
 
         setTeamMembers(data.members || []);
         setPendingInvitations(data.invitations || []);
+        setCanManage(Boolean(data.can_manage));
+        setOrgRole(data.org_role ?? null);
+        return true;
       } catch (err) {
         console.error('Error fetching team members:', err);
         toast({ title: 'Error', description: 'Failed to load members' });
+        return false;
       } finally {
         setMembersLoading(false);
       }
@@ -170,7 +239,6 @@ function TeamsContent() {
       toast({ title: 'Success', description: 'Team updated' });
       setEditOpen(false);
       await fetchTeams();
-      // Keep the details dialog in sync instead of dropping the selection
       setSelectedTeam({
         ...selectedTeam,
         name: editForm.name.trim(),
@@ -183,9 +251,7 @@ function TeamsContent() {
   };
 
   const handleDeleteTeam = async (teamId: string, teamName: string) => {
-    if (!confirm(`Are you sure you want to delete "${teamName}"?`)) {
-      return;
-    }
+    if (!confirm(`Are you sure you want to delete "${teamName}"?`)) return;
 
     try {
       const res = await authFetch(`/api/teams/${teamId}`, { method: 'DELETE' });
@@ -219,10 +285,7 @@ function TeamsContent() {
     try {
       const res = await authFetch(`/api/teams/${selectedTeam.id}/members`, {
         method: 'POST',
-        body: JSON.stringify({
-          email: addMemberEmail.trim(),
-          role: 'member',
-        }),
+        body: JSON.stringify({ email: addMemberEmail.trim(), role: 'member' }),
       });
 
       const data = await res.json();
@@ -232,15 +295,10 @@ function TeamsContent() {
         return;
       }
 
-      // The API returns either an added member, an invitation message, or a
-      // warning (invitation saved but email delivery failed).
       if (data.warning) {
         toast({ title: 'Invitation created', description: data.warning });
       } else {
-        toast({
-          title: 'Success',
-          description: data.message || 'Member added to team',
-        });
+        toast({ title: 'Success', description: data.message || 'Member added to team' });
       }
 
       setAddMemberEmail('');
@@ -253,12 +311,9 @@ function TeamsContent() {
     }
   };
 
-  const handleRemoveMember = async (memberId: string, email: string) => {
+  const handleRemoveMember = async (memberId: string, label: string) => {
     if (!selectedTeam) return;
-
-    if (!confirm(`Remove ${email} from this team?`)) {
-      return;
-    }
+    if (!confirm(`Remove ${label} from this team?`)) return;
 
     try {
       const res = await authFetch(`/api/teams/${selectedTeam.id}/members/${memberId}`, {
@@ -303,22 +358,21 @@ function TeamsContent() {
   };
 
   const handleOpenTeamDetails = async (team: TeamWithMembers) => {
+    // Reset anything left over from a previously opened team so permissions never leak across teams
     setSelectedTeam(team);
     setEditForm({ name: team.name, description: team.description || '' });
+    setTeamMembers([]);
     setPendingInvitations([]);
-    await fetchTeamMembers(team.id);
-    setDetailsOpen(true);
+    setCanManage(false);
+    setOrgRole(null);
+
+    const ok = await fetchTeamMembers(team.id);
+    if (ok) setDetailsOpen(true);
   };
 
-  if (loading) {
-    return <PageLoading />;
-  }
+  if (loading) return <PageLoading />;
+  if (error) return <PageError message={error} />;
 
-  if (error) {
-    return <PageError message={error} />;
-  }
-
-  // Single create-team dialog, reused by the header and the empty state
   const renderCreateDialog = (label: string) => (
     <Dialog open={createOpen} onOpenChange={setCreateOpen}>
       <DialogTrigger asChild>
@@ -342,9 +396,7 @@ function TeamsContent() {
             />
           </div>
           <div>
-            <label className="block text-sm font-medium text-gray-900">
-              Description (optional)
-            </label>
+            <label className="block text-sm font-medium text-gray-900">Description (optional)</label>
             <Textarea
               placeholder="Team description and purpose"
               value={createForm.description}
@@ -368,43 +420,50 @@ function TeamsContent() {
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-3xl font-bold text-gray-900">Teams</h1>
-          <p className="mt-1 text-sm text-gray-600">
-            Manage your organization's teams and members
-          </p>
+          <p className="mt-1 text-sm text-gray-600">Manage your organization's teams and members</p>
         </div>
-
-        {isManager && renderCreateDialog('New Team')}
+        {canCreateTeam && renderCreateDialog('New Team')}
       </div>
 
       {/* Teams Grid */}
       {teams.length === 0 ? (
         <EmptyState
           title="No teams yet"
-          description="Create your first team to get started organizing your members"
-          action={isManager ? renderCreateDialog('Create Team') : undefined}
+          description={
+            canCreateTeam
+              ? 'Create your first team to get started organizing your members'
+              : 'You are not part of any team yet'
+          }
+          action={canCreateTeam ? renderCreateDialog('Create Team') : undefined}
         />
       ) : (
         <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
           {teams.map((team) => (
-            <div
+            <button
+              type="button"
               key={team.id}
-              className="rounded-lg border border-gray-200 bg-white p-6 hover:border-gray-300 hover:shadow-sm transition-all cursor-pointer"
+              className="rounded-lg border border-gray-200 bg-white p-6 text-left transition-all hover:border-gray-300 hover:shadow-sm focus-visible:outline focus-visible:outline-2 focus-visible:outline-blue-600"
               onClick={() => handleOpenTeamDetails(team)}
             >
-              <div className="flex items-start justify-between">
-                <div className="flex-1">
+              <div className="flex items-start justify-between gap-3">
+                <div className="min-w-0 flex-1">
                   <h3 className="text-lg font-semibold text-gray-900">{team.name}</h3>
                   {team.description && (
                     <p className="mt-1 text-sm text-gray-600">{team.description}</p>
                   )}
                 </div>
+                {team.user_role === 'team_lead' && (
+                  <span className="shrink-0 rounded-full border border-blue-200 bg-blue-50 px-2 py-0.5 text-xs font-medium text-blue-700">
+                    Lead
+                  </span>
+                )}
               </div>
 
               <div className="mt-4 flex items-center gap-2 text-sm text-gray-500">
                 <Users className="h-4 w-4" />
                 <span>{team.member_count || 0} members</span>
               </div>
-            </div>
+            </button>
           ))}
         </div>
       )}
@@ -421,15 +480,17 @@ function TeamsContent() {
               <div className="space-y-6">
                 <div className="space-y-2">
                   <p className="text-sm font-medium text-gray-900">Description</p>
-                  <p className="text-sm text-gray-600">
-                    {selectedTeam.description || 'No description'}
-                  </p>
+                  <p className="text-sm text-gray-600">{selectedTeam.description || 'No description'}</p>
                 </div>
 
                 <div className="space-y-4">
                   <div className="flex items-center justify-between">
-                    <p className="text-sm font-medium text-gray-900">Members</p>
-                    {isManager && (
+                    <p className="text-sm font-medium text-gray-900">
+                      Members{!membersLoading && ` (${teamMembers.length})`}
+                    </p>
+
+                    {/* Edit button: only for people who can manage THIS team */}
+                    {canManage && (
                       <Dialog open={editOpen} onOpenChange={setEditOpen}>
                         <DialogTrigger asChild>
                           <Button variant="outline" size="sm" className="gap-1">
@@ -443,34 +504,22 @@ function TeamsContent() {
                           </DialogHeader>
                           <form onSubmit={handleUpdateTeam} className="space-y-4">
                             <div>
-                              <label className="block text-sm font-medium text-gray-900">
-                                Team Name
-                              </label>
+                              <label className="block text-sm font-medium text-gray-900">Team Name</label>
                               <Input
                                 value={editForm.name}
-                                onChange={(e) =>
-                                  setEditForm({ ...editForm, name: e.target.value })
-                                }
+                                onChange={(e) => setEditForm({ ...editForm, name: e.target.value })}
                                 required
                               />
                             </div>
                             <div>
-                              <label className="block text-sm font-medium text-gray-900">
-                                Description
-                              </label>
+                              <label className="block text-sm font-medium text-gray-900">Description</label>
                               <Textarea
                                 value={editForm.description}
-                                onChange={(e) =>
-                                  setEditForm({ ...editForm, description: e.target.value })
-                                }
+                                onChange={(e) => setEditForm({ ...editForm, description: e.target.value })}
                               />
                             </div>
                             <DialogFooter>
-                              <Button
-                                type="button"
-                                variant="outline"
-                                onClick={() => setEditOpen(false)}
-                              >
+                              <Button type="button" variant="outline" onClick={() => setEditOpen(false)}>
                                 Cancel
                               </Button>
                               <Button type="submit">Update</Button>
@@ -486,64 +535,67 @@ function TeamsContent() {
                       <Loader2 className="h-4 w-4 animate-spin text-gray-400" />
                     </div>
                   ) : (
-                    <div className="space-y-2 max-h-64 overflow-y-auto">
+                    <ul className="max-h-64 space-y-2 overflow-y-auto">
                       {teamMembers.length === 0 ? (
-                        <p className="text-sm text-gray-500">No members yet</p>
+                        <li className="text-sm text-gray-500">No members yet</li>
                       ) : (
-                        teamMembers.map((member) => (
-                          <div
-                            key={member.id}
-                            className="flex items-center justify-between rounded border border-gray-200 p-3"
-                          >
-                            <div className="flex-1">
-                              <p className="text-sm font-medium text-gray-900">
-                                {member.user?.email || 'Unknown'}
-                              </p>
-                              {member.user?.display_name && (
-                                <p className="text-xs text-gray-500">{member.user.display_name}</p>
-                              )}
-                            </div>
+                        teamMembers.map((member) => {
+                          const name = memberName(member);
+                          const isYou = member.user_id === authUser?.id;
+                          const secondary =
+                            member.user?.email && member.user.email !== name ? member.user.email : null;
 
-                            <div className="flex items-center gap-2">
-                              {isManager ? (
-                                <>
-                                  <select
-                                    value={member.role}
-                                    onChange={(e) =>
-                                      handleUpdateMemberRole(
-                                        member.id,
-                                        e.target.value as 'team_lead' | 'member',
-                                      )
-                                    }
-                                    className="text-xs border border-gray-200 rounded px-2 py-1"
-                                  >
-                                    <option value="member">Member</option>
-                                    <option value="team_lead">Lead</option>
-                                  </select>
-                                  <Button
-                                    variant="ghost"
-                                    size="sm"
-                                    onClick={() =>
-                                      handleRemoveMember(member.id, member.user?.email || 'unknown')
-                                    }
-                                  >
-                                    <Trash2 className="h-4 w-4 text-red-600" />
-                                  </Button>
-                                </>
-                              ) : (
-                                <span className="text-xs text-gray-500 capitalize">
-                                  {member.role.replace('_', ' ')}
-                                </span>
-                              )}
-                            </div>
-                          </div>
-                        ))
+                          return (
+                            <li
+                              key={member.id}
+                              className="flex items-center justify-between rounded border border-gray-200 p-3"
+                            >
+                              <div className="min-w-0 flex-1">
+                                <p className="truncate text-sm font-medium text-gray-900">
+                                  {name}
+                                  {isYou && <span className="ml-2 text-xs font-normal text-gray-500">(you)</span>}
+                                </p>
+                                {secondary && <p className="truncate text-xs text-gray-500">{secondary}</p>}
+                              </div>
+
+                              <div className="ml-3 flex shrink-0 items-center gap-2">
+                                {canManage ? (
+                                  <>
+                                    <select
+                                      aria-label={`Role for ${name}`}
+                                      value={member.role}
+                                      onChange={(e) =>
+                                        handleUpdateMemberRole(member.id, e.target.value as 'team_lead' | 'member')
+                                      }
+                                      className="rounded border border-gray-200 px-2 py-1 text-xs"
+                                    >
+                                      <option value="member">Member</option>
+                                      <option value="team_lead">Lead</option>
+                                    </select>
+                                    <Button
+                                      variant="ghost"
+                                      size="sm"
+                                      aria-label={`Remove ${name}`}
+                                      onClick={() => handleRemoveMember(member.id, name)}
+                                    >
+                                      <Trash2 className="h-4 w-4 text-red-600" />
+                                    </Button>
+                                  </>
+                                ) : (
+                                  <span className="rounded-full border border-gray-200 bg-gray-50 px-2 py-0.5 text-xs text-gray-600">
+                                    {member.role === 'team_lead' ? 'Team lead' : 'Member'}
+                                  </span>
+                                )}
+                              </div>
+                            </li>
+                          );
+                        })
                       )}
-                    </div>
+                    </ul>
                   )}
 
-                  {/* Pending invitations */}
-                  {isManager && pendingInvitations.length > 0 && (
+                  {/* Pending invitations (managers only) */}
+                  {canManage && pendingInvitations.length > 0 && (
                     <div className="space-y-2">
                       <p className="text-sm font-medium text-gray-900">Pending invitations</p>
                       {pendingInvitations.map((inv) => (
@@ -563,8 +615,8 @@ function TeamsContent() {
                     </div>
                   )}
 
-                  {/* Add Member / Invite Form */}
-                  {isManager && (
+                  {/* Add member / invite (managers only) */}
+                  {canManage && (
                     <form onSubmit={handleAddMember} className="flex gap-2 pt-2">
                       <Input
                         placeholder="Enter email to add or invite"
@@ -581,11 +633,8 @@ function TeamsContent() {
               </div>
 
               <DialogFooter>
-                {isManager && selectedTeam.name !== 'General' && (
-                  <Button
-                    variant="destructive"
-                    onClick={() => handleDeleteTeam(selectedTeam.id, selectedTeam.name)}
-                  >
+                {canDeleteTeam && selectedTeam.name !== 'General' && (
+                  <Button variant="destructive" onClick={() => handleDeleteTeam(selectedTeam.id, selectedTeam.name)}>
                     <Trash2 className="mr-2 h-4 w-4" />
                     Delete Team
                   </Button>

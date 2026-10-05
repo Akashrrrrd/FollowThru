@@ -159,12 +159,14 @@ export class HallucinationDetector {
   }
 
   async getFlaggedTasksForUser(userId: string): Promise<any[]> {
+    const nowIso = new Date().toISOString();
     const { data, error } = await this.supabase
       .from('tasks')
       .select('*, hallucination_flags(*)')
       .eq('user_id', userId)
       .eq('flagged_for_review', true)
-      .not('grace_period_ends_at', 'is', null) // was .neq(..., null), which never matches in SQL
+      .not('grace_period_ends_at', 'is', null) // grace_period_ends_at is set
+      .gt('grace_period_ends_at', nowIso) // and hasn't expired yet
       .order('grace_period_ends_at', { ascending: true });
     if (error) throw error;
     return data || [];

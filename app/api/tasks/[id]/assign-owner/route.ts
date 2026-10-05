@@ -104,13 +104,13 @@ export async function PATCH(
     }
 
     if (!task) {
-      return NextResponse.json({ error: 'Task not found.' }, { status: 404 });
+      return NextResponse.json({ error: 'Commitment not found.' }, { status: 404 });
     }
 
     // Permission check: user must own the meeting OR be org manager
     const taskMeetings = task.meetings as Array<{ id: string; user_id: string }>;
     if (!taskMeetings || taskMeetings.length === 0) {
-      return NextResponse.json({ error: 'Task meeting not found.' }, { status: 404 });
+      return NextResponse.json({ error: 'Commitment meeting not found.' }, { status: 404 });
     }
 
     const isOwner = taskMeetings[0].user_id === user.userId;

@@ -3,236 +3,187 @@
  *
  * POST /api/commitments/bulk
  *
- * Executes bulk operations on multiple commitments:
- * - assign: Assign unassigned commitments to a user
- * - reassign: Change assignee of multiple commitments
- * - status: Update status
- * - due_date: Update due dates
- * - priority: Update priority
+ * Actions: assign, reassign, status, due_date, priority
  *
- * Security: Enforces organization and team isolation. User must have
- * authorization (manager/owner for org, or team lead for team).
+ * Security model:
+ *  - The organization is derived from the COMMITMENTS themselves (database), never from the
+ *    request and never from "the user's first organization".
+ *  - All commitments in one request must belong to a single organization, and the caller
+ *    must be a member of it.
+ *  - Org owners/managers may act on any commitment in the organization.
+ *  - Team leads may act only on commitments whose team they lead.
+ *    (Commitments with NO team are manager-only.)
+ *  - Everyone else gets 403.
  */
 
 import { NextRequest, NextResponse } from 'next/server';
-import {
-  createServerClient,
-  getUserFromRequest,
-} from '@/lib/supabase-server';
-import { getUserOrganizationContext } from '@/lib/organization-context';
-import { getUserTeams } from '@/lib/team-authorization';
+import { createServerClient, getUserFromRequest } from '@/lib/supabase-server';
 import {
   executeBulkAction,
+  fetchCommitmentsByIds,
   type BulkActionRequest,
+  type BulkActionType,
 } from '@/lib/bulk-action-service';
 
 export const dynamic = 'force-dynamic';
 
+const VALID_ACTIONS: BulkActionType[] = ['assign', 'reassign', 'status', 'due_date', 'priority'];
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const MAX_BULK_SIZE = 1000;
+
 export async function POST(req: NextRequest) {
   try {
-    /*
-     * -------------------------------------------------------
-     * AUTHENTICATION
-     * -------------------------------------------------------
-     */
-
+    /* ---------------- Authentication ---------------- */
     const user = await getUserFromRequest(req);
-
     if (!user) {
+      return NextResponse.json({ error: 'Unauthenticated' }, { status: 401 });
+    }
+
+    /* ---------------- Parse + validate request ---------------- */
+    let raw: any;
+    try {
+      raw = await req.json();
+    } catch {
+      return NextResponse.json({ error: 'Invalid request body' }, { status: 400 });
+    }
+
+    if (!raw || !VALID_ACTIONS.includes(raw.action)) {
       return NextResponse.json(
-        { error: 'Unauthenticated' },
-        { status: 401 }
+        { error: `action must be one of: ${VALID_ACTIONS.join(', ')}` },
+        { status: 400 },
       );
     }
+
+    if (!Array.isArray(raw.commitmentIds) || raw.commitmentIds.length === 0) {
+      return NextResponse.json(
+        { error: 'commitmentIds must be a non-empty array' },
+        { status: 400 },
+      );
+    }
+
+    if (
+      raw.commitmentIds.some((id: unknown) => typeof id !== 'string' || !UUID_RE.test(id))
+    ) {
+      return NextResponse.json({ error: 'commitmentIds must be valid UUIDs' }, { status: 400 });
+    }
+
+    const commitmentIds: string[] = Array.from(new Set(raw.commitmentIds as string[]));
+
+    if (commitmentIds.length > MAX_BULK_SIZE) {
+      return NextResponse.json(
+        { error: `Bulk action limited to ${MAX_BULK_SIZE} commitments per request` },
+        { status: 400 },
+      );
+    }
+
+    if (!raw.value || typeof raw.value !== 'object' || Array.isArray(raw.value)) {
+      return NextResponse.json({ error: 'value must be an object' }, { status: 400 });
+    }
+
+    const body: BulkActionRequest = {
+      action: raw.action,
+      commitmentIds,
+      value: raw.value,
+    };
 
     const supabase = createServerClient();
 
-    /*
-     * -------------------------------------------------------
-     * ORGANIZATION CONTEXT
-     * -------------------------------------------------------
-     */
-
-    const orgContext = await getUserOrganizationContext(
+    /* ---------------- Resolve organization FROM the commitments ---------------- */
+    const { data: found, error: fetchError } = await fetchCommitmentsByIds(
       supabase,
-      user.userId
+      commitmentIds,
+      'id, organization_id, team_id',
     );
 
-    if (!orgContext) {
+    if (fetchError) {
+      console.error('[Bulk Action API] Failed to load commitments:', fetchError);
+      return NextResponse.json({ error: 'Failed to verify commitments' }, { status: 500 });
+    }
+
+    // Same answer for "doesn't exist" and "not yours": don't leak what exists in other orgs
+    if (found.length === 0) {
+      return NextResponse.json({ error: 'Commitments not found' }, { status: 404 });
+    }
+
+    const orgIds = new Set<string | null>(found.map((c: any) => c.organization_id ?? null));
+    if (orgIds.size !== 1) {
       return NextResponse.json(
-        { error: 'User has no organization membership' },
-        { status: 403 }
+        { error: 'All commitments must belong to the same organization' },
+        { status: 400 },
       );
     }
 
-    /*
-     * -------------------------------------------------------
-     * AUTHORIZATION: Manager/Owner or Team Lead
-     * -------------------------------------------------------
-     */
-
-    const isManager =
-      orgContext.role === 'owner' || orgContext.role === 'manager';
-
-    // For non-managers, get their authorized teams
-    let authorizedTeamIds: Set<string> = new Set();
-    if (!isManager) {
-      const userTeams = await getUserTeams(
-        supabase,
-        user.userId,
-        orgContext.organizationId
-      );
-      // Only include teams where user is team_lead
-      authorizedTeamIds = new Set(
-        userTeams
-          .filter((t: any) => t.role === 'team_lead')
-          .map((t: any) => t.teamId)
-      );
+    const organizationId = [...orgIds][0];
+    if (!organizationId) {
+      return NextResponse.json({ error: 'Commitments not found' }, { status: 404 });
     }
 
-    if (!isManager && authorizedTeamIds.size === 0) {
-      return NextResponse.json(
-        {
-          error: 'User does not have authorization to perform bulk actions',
-        },
-        { status: 403 }
-      );
+    /* ---------------- Authorization ---------------- */
+    const { data: orgMember, error: orgError } = await supabase
+      .from('organization_members')
+      .select('role')
+      .eq('user_id', user.userId)
+      .eq('organization_id', organizationId)
+      .maybeSingle();
+
+    if (orgError) {
+      console.error('[Bulk Action API] Failed to verify membership:', orgError);
+      return NextResponse.json({ error: 'Failed to verify authorization' }, { status: 500 });
+    }
+    if (!orgMember) {
+      return NextResponse.json({ error: 'Commitments not found' }, { status: 404 });
     }
 
-    /*
-     * -------------------------------------------------------
-     * PARSE REQUEST
-     * -------------------------------------------------------
-     */
-
-    let body: BulkActionRequest;
-    try {
-      body = await req.json();
-    } catch {
-      return NextResponse.json(
-        { error: 'Invalid request body' },
-        { status: 400 }
-      );
-    }
-
-    /*
-     * -------------------------------------------------------
-     * VALIDATE REQUEST
-     * -------------------------------------------------------
-     */
-
-    if (!body.action || !body.commitmentIds || !Array.isArray(body.commitmentIds)) {
-      return NextResponse.json(
-        {
-          error: 'Missing required fields: action, commitmentIds (array)',
-        },
-        { status: 400 }
-      );
-    }
-
-    if (body.commitmentIds.length === 0) {
-      return NextResponse.json(
-        { error: 'commitmentIds array cannot be empty' },
-        { status: 400 }
-      );
-    }
-
-    // Limit bulk size to prevent abuse
-    const MAX_BULK_SIZE = 1000;
-    if (body.commitmentIds.length > MAX_BULK_SIZE) {
-      return NextResponse.json(
-        {
-          error: `Bulk action limited to ${MAX_BULK_SIZE} commitments per request`,
-        },
-        { status: 400 }
-      );
-    }
-
-    if (!body.value) {
-      return NextResponse.json(
-        { error: 'Missing required field: value' },
-        { status: 400 }
-      );
-    }
-
-    /*
-     * -------------------------------------------------------
-     * VERIFY AUTHORIZATION FOR NON-MANAGERS
-     * -------------------------------------------------------
-     *
-     * For team leads, verify all commitments belong to authorized teams.
-     */
+    const isManager = orgMember.role === 'owner' || orgMember.role === 'manager';
 
     if (!isManager) {
-      // Fetch all commitments to verify access
-      const { data: commitments, error: fetchError } = await supabase
-        .from('tasks')
-        .select('id, team_id, organization_id')
-        .in('id', body.commitmentIds)
-        .eq('organization_id', orgContext.organizationId);
+      const teamIds = Array.from(
+        new Set(found.map((c: any) => c.team_id).filter((t: unknown): t is string => !!t)),
+      );
 
-      if (fetchError) {
+      let ledTeams = new Set<string>();
+      if (teamIds.length > 0) {
+        const { data: leadRows, error: leadError } = await supabase
+          .from('team_members')
+          .select('team_id')
+          .eq('user_id', user.userId)
+          .eq('role', 'team_lead')
+          .in('team_id', teamIds);
+
+        if (leadError) {
+          console.error('[Bulk Action API] Failed to verify team lead role:', leadError);
+          return NextResponse.json({ error: 'Failed to verify authorization' }, { status: 500 });
+        }
+        ledTeams = new Set((leadRows ?? []).map((r: any) => r.team_id));
+      }
+
+      // Commitments without a team are NOT covered by any team lead role
+      const forbidden = found.filter((c: any) => !c.team_id || !ledTeams.has(c.team_id));
+      if (forbidden.length > 0) {
         return NextResponse.json(
-          { error: 'Failed to verify commitments' },
-          { status: 500 }
+          {
+            error:
+              ledTeams.size === 0
+                ? 'You do not have permission to perform bulk actions'
+                : `You can only change commitments in teams you lead (${forbidden.length} not permitted)`,
+          },
+          { status: 403 },
         );
       }
-
-      // Verify all commitments belong to authorized teams
-      for (const commitment of commitments || []) {
-        if (
-          commitment.team_id &&
-          !authorizedTeamIds.has(commitment.team_id)
-        ) {
-          return NextResponse.json(
-            {
-              error: `Unauthorized: cannot modify commitments in team ${commitment.team_id}`,
-            },
-            { status: 403 }
-          );
-        }
-      }
     }
 
-    /*
-     * -------------------------------------------------------
-     * EXECUTE BULK ACTION
-     * -------------------------------------------------------
-     */
+    /* ---------------- Execute ---------------- */
+    const result = await executeBulkAction(supabase, user.userId, organizationId, body);
 
-    const result = await executeBulkAction(
-      supabase,
-      user.userId,
-      orgContext.organizationId,
-      body
-    );
-
-    /*
-     * -------------------------------------------------------
-     * DETERMINE HTTP STATUS
-     * -------------------------------------------------------
-     */
-
-    // All succeeded: 200
     if (result.failedCount === 0) {
       return NextResponse.json(result, { status: 200 });
     }
-
-    // Some succeeded, some failed: 422 (Unprocessable Entity)
     if (result.successCount > 0) {
-      return NextResponse.json(result, { status: 422 });
+      return NextResponse.json(result, { status: 422 }); // partial success
     }
-
-    // All failed: 400
-    return NextResponse.json(result, { status: 400 });
+    return NextResponse.json(result, { status: 400 }); // everything failed
   } catch (err) {
     console.error('[Bulk Action API] Error:', err);
-
-    return NextResponse.json(
-      {
-        error: 'An unexpected error occurred',
-      },
-      { status: 500 }
-    );
+    return NextResponse.json({ error: 'An unexpected error occurred' }, { status: 500 });
   }
 }

@@ -1,14 +1,12 @@
 /**
- * GET  /api/teams/invitations/accept?token=...  - invitation details (public)
+ * GET  /api/teams/invitations/accept?token=...  - invitation details (public, token-gated)
  * POST /api/teams/invitations/accept            - accept invitation (auth required)
  */
 
 import { NextRequest, NextResponse } from 'next/server';
-import {
-  createServerClient,
-  getUserFromRequest,
-} from '@/lib/supabase-server';
+import { createServerClient, getUserFromRequest } from '@/lib/supabase-server';
 import { TeamInvitationService } from '@/lib/team-invitation-service';
+import { removeUnusedPersonalOrganizations } from '@/lib/personal-org-cleanup';
 
 export const dynamic = 'force-dynamic';
 
@@ -17,59 +15,46 @@ export async function POST(request: NextRequest) {
     const user = await getUserFromRequest(request);
 
     if (!user) {
-      console.log('[POST /api/teams/invitations/accept] No user from request');
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     }
 
-    const { token } = (await request.json()) as { token?: string };
+    const body = (await request.json().catch(() => null)) as { token?: string } | null;
+    const token = body?.token;
 
     if (!token || typeof token !== 'string') {
-      return NextResponse.json(
-        { error: 'Invitation token is required' },
-        { status: 400 },
-      );
+      return NextResponse.json({ error: 'Invitation token is required' }, { status: 400 });
     }
-
-    console.log(`[POST /api/teams/invitations/accept] User ${user.userId} accepting invitation with token ${token.substring(0, 8)}...`);
 
     const supabase = createServerClient();
     const invitationService = new TeamInvitationService(supabase);
 
     // Look up the signed-in user's email so we can verify it matches the invite.
-    const { data: authUser, error: authError } =
-      await supabase.auth.admin.getUserById(user.userId);
+    const { data: authUser, error: authError } = await supabase.auth.admin.getUserById(user.userId);
 
     if (authError || !authUser?.user) {
-      console.error('[POST /api/teams/invitations/accept] Failed to resolve accepting user:', authError);
+      console.error('[invitations/accept] Failed to resolve accepting user:', authError);
       return NextResponse.json({ error: 'Failed to accept invitation' }, { status: 500 });
     }
 
-    const userEmail = authUser.user.email ?? null;
-    console.log(`[POST /api/teams/invitations/accept] User email: ${userEmail}`);
+    // Invitation emails are stored lower-cased, so compare lower-cased
+    const userEmail = authUser.user.email?.trim().toLowerCase() ?? null;
 
-    await invitationService.acceptInvitation(
-      token,
-      user.userId,
-      userEmail,
-    );
+    await invitationService.acceptInvitation(token, user.userId, userEmail);
 
-    console.log(`[POST /api/teams/invitations/accept] Successfully accepted invitation for user ${user.userId}`);
+    // Best effort: drop the user's empty auto-created personal organization so the
+    // organization they just joined becomes their only one. Never fails the request.
+    const removed = await removeUnusedPersonalOrganizations(supabase, user.userId);
+    if (removed.length > 0) {
+      console.log(`[invitations/accept] Removed ${removed.length} unused personal organization membership(s) for ${user.userId}`);
+    }
 
-    return NextResponse.json(
-      { message: 'Invitation accepted successfully' },
-      { status: 200 },
-    );
+    return NextResponse.json({ message: 'Invitation accepted successfully' }, { status: 200 });
   } catch (err) {
     const errorMessage = err instanceof Error ? err.message : 'Unknown error';
-
-    console.error(`[POST /api/teams/invitations/accept] Error:`, err);
-    console.error(`[POST /api/teams/invitations/accept] Error message:`, errorMessage);
+    console.error('[invitations/accept] Error:', errorMessage);
 
     if (errorMessage.includes('Invalid or expired')) {
-      return NextResponse.json(
-        { error: 'Invitation is invalid or has expired' },
-        { status: 400 },
-      );
+      return NextResponse.json({ error: 'Invitation is invalid or has expired' }, { status: 400 });
     }
 
     if (errorMessage.includes('email mismatch')) {
@@ -82,10 +67,7 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    return NextResponse.json(
-      { error: 'Failed to accept invitation' },
-      { status: 500 },
-    );
+    return NextResponse.json({ error: 'Failed to accept invitation' }, { status: 500 });
   }
 }
 
@@ -94,10 +76,7 @@ export async function GET(request: NextRequest) {
     const token = new URL(request.url).searchParams.get('token');
 
     if (!token) {
-      return NextResponse.json(
-        { error: 'Invitation token is required' },
-        { status: 400 },
-      );
+      return NextResponse.json({ error: 'Invitation token is required' }, { status: 400 });
     }
 
     const supabase = createServerClient();
@@ -106,10 +85,7 @@ export async function GET(request: NextRequest) {
     const details = await invitationService.getInvitationWithDetails(token);
 
     if (!details) {
-      return NextResponse.json(
-        { error: 'Invitation is invalid or has expired' },
-        { status: 404 },
-      );
+      return NextResponse.json({ error: 'Invitation is invalid or has expired' }, { status: 404 });
     }
 
     return NextResponse.json(
@@ -120,19 +96,13 @@ export async function GET(request: NextRequest) {
           name: details.team?.name,
         },
         inviterName:
-          details.inviterProfile?.display_name ||
-          details.inviterProfile?.full_name ||
-          'A team member',
+          details.inviterProfile?.display_name || details.inviterProfile?.full_name || 'A team member',
         expiresAt: details.invitation.token_expires_at,
       },
       { status: 200 },
     );
   } catch (err) {
     console.error('Error getting invitation details:', err);
-
-    return NextResponse.json(
-      { error: 'Failed to get invitation details' },
-      { status: 500 },
-    );
+    return NextResponse.json({ error: 'Failed to get invitation details' }, { status: 500 });
   }
 }

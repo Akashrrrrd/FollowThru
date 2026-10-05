@@ -1,14 +1,13 @@
 /**
  * Team Context
- * 
- * Client-side helpers to resolve user's team context.
- * Provides team information for UI components and data filtering.
- * 
+ *
+ * Helpers to resolve a user's team context (used by API routes and UI data loading).
+ *
  * Phase 2: Users can be members of multiple teams within their organization.
  */
 
 import { SupabaseClient } from '@supabase/supabase-js';
-import type { Team, TeamMember } from './types';
+import type { Team } from './types';
 
 export interface UserTeamContext {
   organizationId: string;
@@ -22,22 +21,16 @@ export interface UserTeamContext {
 }
 
 /**
- * Get the user's complete team context within an organization.
- * 
- * Returns all teams the user is a member of, with their role in each team.
- * Includes the default "General" team if it exists.
- * 
- * @param supabase - Authenticated Supabase client
- * @param userId - User ID
- * @param organizationId - Organization ID
- * @returns Team context with list of teams and roles
+ * Get the user's team context within ONE organization.
+ *
+ * Two queries total (teams in the org, then the user's memberships in them),
+ * regardless of how many teams exist.
  */
 export async function getUserTeamContext(
   supabase: SupabaseClient,
   userId: string,
   organizationId: string,
 ): Promise<UserTeamContext> {
-  // Get all teams in the organization
   const { data: teams, error: teamsError } = await supabase
     .from('teams')
     .select('id, name')
@@ -46,61 +39,51 @@ export async function getUserTeamContext(
 
   if (teamsError) {
     console.error('Failed to get teams:', teamsError);
-    return {
-      organizationId,
-      teams: [],
-    };
+    return { organizationId, teams: [] };
+  }
+  if (!teams || teams.length === 0) {
+    return { organizationId, teams: [] };
   }
 
-  // Get user's membership in each team
-  const userTeams = [];
+  const { data: memberships, error: memberError } = await supabase
+    .from('team_members')
+    .select('team_id, role')
+    .eq('user_id', userId)
+    .in(
+      'team_id',
+      teams.map((t) => t.id),
+    );
+
+  if (memberError) {
+    console.error('Failed to get team memberships:', memberError);
+    return { organizationId, teams: [] };
+  }
+
+  const roleByTeam = new Map<string, 'team_lead' | 'member'>(
+    (memberships ?? []).map((m) => [m.team_id, m.role as 'team_lead' | 'member']),
+  );
+
+  const userTeams: UserTeamContext['teams'] = [];
   let defaultTeamId: string | undefined;
   let defaultTeamName: string | undefined;
 
-  for (const team of teams ?? []) {
-    // Get user's role in this team
-    const { data: membership, error: memberError } = await supabase
-      .from('team_members')
-      .select('role')
-      .eq('team_id', team.id)
-      .eq('user_id', userId)
-      .maybeSingle();
+  for (const team of teams) {
+    const role = roleByTeam.get(team.id);
+    if (!role) continue;
 
-    if (memberError) {
-      console.error('Failed to get team membership:', memberError);
-      continue;
-    }
+    userTeams.push({ teamId: team.id, teamName: team.name, role });
 
-    if (membership) {
-      userTeams.push({
-        teamId: team.id,
-        teamName: team.name,
-        role: membership.role as 'team_lead' | 'member',
-      });
-
-      // Track default team
-      if (team.name === 'General') {
-        defaultTeamId = team.id;
-        defaultTeamName = team.name;
-      }
+    if (team.name === 'General') {
+      defaultTeamId = team.id;
+      defaultTeamName = team.name;
     }
   }
 
-  return {
-    organizationId,
-    teams: userTeams,
-    defaultTeamId,
-    defaultTeamName,
-  };
+  return { organizationId, teams: userTeams, defaultTeamId, defaultTeamName };
 }
 
 /**
  * Get a specific team's details including member count.
- * Used for team cards and detail views.
- * 
- * @param supabase - Authenticated Supabase client
- * @param teamId - Team ID
- * @returns Team with member count, or null if not found
  */
 export async function getTeamWithMemberCount(
   supabase: SupabaseClient,
@@ -116,26 +99,16 @@ export async function getTeamWithMemberCount(
     return null;
   }
 
-  // Count members
   const { count: memberCount } = await supabase
     .from('team_members')
     .select('*', { count: 'exact', head: true })
     .eq('team_id', teamId);
 
-  return {
-    ...team,
-    member_count: memberCount ?? 0,
-  };
+  return { ...team, member_count: memberCount ?? 0 };
 }
 
 /**
- * Get user's role in a specific team.
- * Used for permission checks in UI.
- * 
- * @param supabase - Authenticated Supabase client
- * @param userId - User ID
- * @param teamId - Team ID
- * @returns 'team_lead', 'member', or null if not a member
+ * Get user's role in a specific team ('team_lead', 'member', or null if not a member).
  */
 export async function getUserRoleInTeam(
   supabase: SupabaseClient,
@@ -159,11 +132,6 @@ export async function getUserRoleInTeam(
 
 /**
  * List all members of a team with their profile info.
- * Used for team member displays.
- * 
- * @param supabase - Authenticated Supabase client
- * @param teamId - Team ID
- * @returns Array of team members with user profile data
  */
 export async function getTeamMembersWithProfiles(
   supabase: SupabaseClient,
@@ -186,19 +154,21 @@ export async function getTeamMembersWithProfiles(
     console.error('Failed to get team members:', membersError);
     return [];
   }
+  if (members.length === 0) return [];
 
-  // Get user profiles for display
-  const userIds = members.map((m) => m.user_id);
   const { data: profiles, error: profilesError } = await supabase
     .from('user_profiles')
     .select('id, display_name, job_title')
-    .in('id', userIds);
+    .in(
+      'id',
+      members.map((m) => m.user_id),
+    );
 
   if (profilesError) {
     console.error('Failed to get user profiles:', profilesError);
   }
 
-  const profileMap = new Map(profiles?.map((p) => [p.id, p]) ?? []);
+  const profileMap = new Map((profiles ?? []).map((p) => [p.id, p]));
 
   return members.map((m) => {
     const profile = profileMap.get(m.user_id);
@@ -213,12 +183,7 @@ export async function getTeamMembersWithProfiles(
 }
 
 /**
- * Check if user has team lead role (for permissions).
- * 
- * @param supabase - Authenticated Supabase client
- * @param userId - User ID
- * @param teamId - Team ID
- * @returns true if user is team lead
+ * Check if user has the team lead role for a team.
  */
 export async function isTeamLead(
   supabase: SupabaseClient,

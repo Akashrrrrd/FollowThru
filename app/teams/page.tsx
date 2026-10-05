@@ -18,8 +18,6 @@ import { ProtectedRoute } from '@/components/protected-route';
 import { useAuthFetch } from '@/hooks/use-auth-fetch';
 import { useAuth } from '@/components/auth-provider';
 import { useToast } from '@/hooks/use-toast';
-import { useRealtimeTeamMembers } from '@/hooks/use-realtime-team-members';
-import { useRealtimeTeams } from '@/hooks/use-realtime-teams';
 import type { Team, TeamMember } from '@/lib/types';
 
 interface TeamWithMembers extends Team {
@@ -79,47 +77,8 @@ function TeamsContent() {
   const [canManage, setCanManage] = useState(false);
   const [orgRole, setOrgRole] = useState<string | null>(null);
 
+  // Org owners/managers: delete teams, change roles, remove team leads (the API enforces this too)
   const canDeleteTeam = orgRole === 'owner' || orgRole === 'manager';
-
-  /* Subscribe to team membership changes */
-  useRealtimeTeamMembers((event, member) => {
-    // If viewing a team, refresh its members when membership changes
-    if (selectedTeam && member.team_id === selectedTeam.id) {
-      if (event === 'insert' || event === 'delete' || event === 'update') {
-        fetchTeamMembers(selectedTeam.id);
-      }
-    }
-  });
-
-  /* Subscribe to team changes (new teams created, team details updated, etc.) */
-  useRealtimeTeams((event, team) => {
-    if (event === 'insert') {
-      // New team created - add it to the list (with minimal fields)
-      const now = new Date().toISOString();
-      const newTeam: TeamWithMembers = {
-        id: team.id,
-        organization_id: team.organization_id as string,
-        name: (team.name as string) || 'New Team',
-        description: (team.description as string | undefined) || undefined,
-        created_by: '',
-        created_at: (team.created_at as string) || now,
-        updated_at: (team.updated_at as string) || now,
-      };
-      setTeams((prev) => [...prev, newTeam]);
-    } else if (event === 'update') {
-      // Team updated - refresh the teams list
-      setTeams((prev) =>
-        prev.map((t) => (t.id === team.id ? { ...t, ...team } : t))
-      );
-    } else if (event === 'delete') {
-      // Team deleted - remove it from the list
-      setTeams((prev) => prev.filter((t) => t.id !== team.id));
-      if (selectedTeam?.id === team.id) {
-        setDetailsOpen(false);
-        setSelectedTeam(null);
-      }
-    }
-  });
 
   const fetchTeams = useCallback(async () => {
     setLoading(true);
@@ -561,7 +520,8 @@ function TeamsContent() {
                               <div className="ml-3 flex shrink-0 items-center gap-2">
                                 {canManage ? (
                                   <>
-                                    <select
+                                    {canDeleteTeam ? (
+<select
                                       aria-label={`Role for ${name}`}
                                       value={member.role}
                                       onChange={(e) =>
@@ -572,7 +532,11 @@ function TeamsContent() {
                                       <option value="member">Member</option>
                                       <option value="team_lead">Lead</option>
                                     </select>
-                                    <Button
+) : (
+<span className="rounded-full border border-gray-200 bg-gray-50 px-2 py-0.5 text-xs text-gray-600">{member.role === 'team_lead' ? 'Team lead' : 'Member'}</span>
+)}
+                                    {!isYou && (member.role !== 'team_lead' || canDeleteTeam) && (
+<Button
                                       variant="ghost"
                                       size="sm"
                                       aria-label={`Remove ${name}`}
@@ -580,6 +544,7 @@ function TeamsContent() {
                                     >
                                       <Trash2 className="h-4 w-4 text-red-600" />
                                     </Button>
+)}
                                   </>
                                 ) : (
                                   <span className="rounded-full border border-gray-200 bg-gray-50 px-2 py-0.5 text-xs text-gray-600">

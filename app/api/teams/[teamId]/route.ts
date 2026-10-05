@@ -1,20 +1,24 @@
 /**
- * GET /api/teams/[teamId] - Get team details
- * PATCH /api/teams/[teamId] - Update team (managers only)
- * DELETE /api/teams/[teamId] - Delete team (managers only)
+ * GET    /api/teams/[teamId] - Team details (any member of the team's organization)
+ * PATCH  /api/teams/[teamId] - Update name/description (org owners/managers, or the team's lead)
+ * DELETE /api/teams/[teamId] - Delete team (org owners/managers only)
+ *
+ * The organization is resolved from the TEAM (see getTeamAccess), so this works for users
+ * who belong to several organizations.
  */
 
 import { NextRequest, NextResponse } from 'next/server';
 import { createServerClient, getUserFromRequest } from '@/lib/supabase-server';
-import { getUserOrganizationContext } from '@/lib/organization-context';
-import { canManageTeam, teamBelongsToOrganization } from '@/lib/team-authorization';
+import { getTeamAccess } from '@/lib/team-access';
 
 export const dynamic = 'force-dynamic';
 
-export async function GET(
-  request: NextRequest,
-  { params }: { params: { teamId: string } },
-) {
+const TEAM_COLUMNS = 'id, name, description, created_by, created_at, updated_at';
+const DEFAULT_TEAM_NAME = 'General';
+
+type Params = { params: { teamId: string } };
+
+export async function GET(request: NextRequest, { params }: Params) {
   try {
     const user = await getUserFromRequest(request);
     if (!user) {
@@ -23,44 +27,29 @@ export async function GET(
 
     const supabase = createServerClient();
 
-    // Get user's org
-    const orgContext = await getUserOrganizationContext(supabase, user.userId);
-    if (!orgContext) {
-      return NextResponse.json({ error: 'User has no organization' }, { status: 403 });
-    }
-
-    // Verify team belongs to org
-    const teamValid = await teamBelongsToOrganization(
-      supabase,
-      params.teamId,
-      orgContext.organizationId,
-    );
-    if (!teamValid) {
+    const access = await getTeamAccess(supabase, user.userId, params.teamId);
+    if (!access) {
       return NextResponse.json({ error: 'Team not found' }, { status: 404 });
     }
 
-    // Get team details
     const { data: team, error } = await supabase
       .from('teams')
-      .select('id, name, description, created_by, created_at, updated_at')
+      .select(TEAM_COLUMNS)
       .eq('id', params.teamId)
-      .single();
+      .maybeSingle();
 
     if (error || !team) {
       return NextResponse.json({ error: 'Team not found' }, { status: 404 });
     }
 
-    return NextResponse.json(team);
+    return NextResponse.json({ ...team, can_manage: access.canManage });
   } catch (err) {
     console.error('Team GET error:', err);
     return NextResponse.json({ error: 'Internal server error' }, { status: 500 });
   }
 }
 
-export async function PATCH(
-  request: NextRequest,
-  { params }: { params: { teamId: string } },
-) {
+export async function PATCH(request: NextRequest, { params }: Params) {
   try {
     const user = await getUserFromRequest(request);
     if (!user) {
@@ -69,52 +58,74 @@ export async function PATCH(
 
     const supabase = createServerClient();
 
-    // Get user's org
-    const orgContext = await getUserOrganizationContext(supabase, user.userId);
-    if (!orgContext) {
-      return NextResponse.json({ error: 'User has no organization' }, { status: 403 });
-    }
-
-    // Verify team belongs to org
-    const teamValid = await teamBelongsToOrganization(
-      supabase,
-      params.teamId,
-      orgContext.organizationId,
-    );
-    if (!teamValid) {
+    const access = await getTeamAccess(supabase, user.userId, params.teamId);
+    if (!access) {
       return NextResponse.json({ error: 'Team not found' }, { status: 404 });
     }
-
-    // Check if user can manage team
-    const canManage = await canManageTeam(
-      supabase,
-      user.userId,
-      params.teamId,
-      orgContext.organizationId,
-    );
-    if (!canManage) {
-      return NextResponse.json({ error: 'You do not have permission to update this team' }, { status: 403 });
+    if (!access.canManage) {
+      return NextResponse.json(
+        { error: 'You do not have permission to update this team' },
+        { status: 403 },
+      );
     }
 
-    const body = await request.json();
-    const { name, description } = body as { name?: string; description?: string };
+    const body = (await request.json().catch(() => null)) as {
+      name?: unknown;
+      description?: unknown;
+    } | null;
 
     const updates: Record<string, unknown> = { updated_at: new Date().toISOString() };
-    if (name !== undefined) {
-      updates.name = name.trim();
+
+    if (body?.name !== undefined) {
+      if (typeof body.name !== 'string' || !body.name.trim()) {
+        return NextResponse.json({ error: 'Team name is required' }, { status: 400 });
+      }
+      if (body.name.trim().length > 100) {
+        return NextResponse.json({ error: 'Team name must be at most 100 characters' }, { status: 400 });
+      }
+      updates.name = body.name.trim();
     }
-    if (description !== undefined) {
-      updates.description = description?.trim() || null;
+
+    if (body?.description !== undefined) {
+      if (body.description !== null && typeof body.description !== 'string') {
+        return NextResponse.json({ error: 'Invalid description' }, { status: 400 });
+      }
+      const description = typeof body.description === 'string' ? body.description.trim() : '';
+      if (description.length > 1000) {
+        return NextResponse.json({ error: 'Description must be at most 1000 characters' }, { status: 400 });
+      }
+      updates.description = description || null;
+    }
+
+    if (Object.keys(updates).length === 1) {
+      return NextResponse.json({ error: 'No fields to update' }, { status: 400 });
+    }
+
+    // The default team keeps its name (other code recognises it by name)
+    if (updates.name !== undefined) {
+      const { data: current } = await supabase
+        .from('teams')
+        .select('name')
+        .eq('id', params.teamId)
+        .maybeSingle();
+
+      if (current?.name === DEFAULT_TEAM_NAME && updates.name !== DEFAULT_TEAM_NAME) {
+        return NextResponse.json({ error: 'The General team cannot be renamed' }, { status: 400 });
+      }
     }
 
     const { data: team, error } = await supabase
       .from('teams')
       .update(updates)
       .eq('id', params.teamId)
-      .select('id, name, description, created_by, created_at, updated_at')
+      .select(TEAM_COLUMNS)
       .single();
 
     if (error) {
+      if (error.code === '23505') {
+        return NextResponse.json({ error: 'A team with this name already exists' }, { status: 400 });
+      }
+      console.error('Failed to update team:', error);
       return NextResponse.json({ error: 'Failed to update team' }, { status: 500 });
     }
 
@@ -125,10 +136,7 @@ export async function PATCH(
   }
 }
 
-export async function DELETE(
-  request: NextRequest,
-  { params }: { params: { teamId: string } },
-) {
+export async function DELETE(request: NextRequest, { params }: Params) {
   try {
     const user = await getUserFromRequest(request);
     if (!user) {
@@ -137,53 +145,34 @@ export async function DELETE(
 
     const supabase = createServerClient();
 
-    // Get user's org
-    const orgContext = await getUserOrganizationContext(supabase, user.userId);
-    if (!orgContext) {
-      return NextResponse.json({ error: 'User has no organization' }, { status: 403 });
-    }
-
-    // Verify team belongs to org
-    const teamValid = await teamBelongsToOrganization(
-      supabase,
-      params.teamId,
-      orgContext.organizationId,
-    );
-    if (!teamValid) {
+    const access = await getTeamAccess(supabase, user.userId, params.teamId);
+    if (!access) {
       return NextResponse.json({ error: 'Team not found' }, { status: 404 });
     }
 
-    // Check if user can manage team
-    const canManage = await canManageTeam(
-      supabase,
-      user.userId,
-      params.teamId,
-      orgContext.organizationId,
-    );
-    if (!canManage) {
-      return NextResponse.json({ error: 'You do not have permission to delete this team' }, { status: 403 });
+    // Deleting a team is an organization-level action (team leads cannot delete their team)
+    if (access.orgRole !== 'owner' && access.orgRole !== 'manager') {
+      return NextResponse.json(
+        { error: 'Only organization owners and managers can delete teams' },
+        { status: 403 },
+      );
     }
 
-    // Do not allow deletion of General team (safety)
     const { data: team, error: getError } = await supabase
       .from('teams')
       .select('name')
       .eq('id', params.teamId)
-      .single();
+      .maybeSingle();
 
     if (getError || !team) {
       return NextResponse.json({ error: 'Team not found' }, { status: 404 });
     }
 
-    if (team.name === 'General') {
+    if (team.name === DEFAULT_TEAM_NAME) {
       return NextResponse.json({ error: 'Cannot delete the General team' }, { status: 400 });
     }
 
-    // Delete team (cascades to team_members)
-    const { error } = await supabase
-      .from('teams')
-      .delete()
-      .eq('id', params.teamId);
+    const { error } = await supabase.from('teams').delete().eq('id', params.teamId);
 
     if (error) {
       console.error('Failed to delete team:', error);

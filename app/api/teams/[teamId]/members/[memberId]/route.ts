@@ -1,19 +1,26 @@
 /**
- * PATCH /api/teams/[teamId]/members/[memberId] - Update member role
- * DELETE /api/teams/[teamId]/members/[memberId] - Remove member from team
+ * PATCH  /api/teams/[teamId]/members/[memberId] - Change a member's role
+ * DELETE /api/teams/[teamId]/members/[memberId] - Remove a member from the team
+ *
+ * Who can do what:
+ *  - Org owners/managers: change any role, remove anyone (except themselves).
+ *  - Team lead of THIS team: remove regular members (except themselves).
+ *    Team leads cannot change roles and cannot remove another team lead,
+ *    so a lead can't promote people or demote/remove other leads.
+ *  - Everyone else: 403.
  */
 
 import { NextRequest, NextResponse } from 'next/server';
 import { createServerClient, getUserFromRequest } from '@/lib/supabase-server';
-import { getUserOrganizationContext } from '@/lib/organization-context';
-import { canManageTeam, teamBelongsToOrganization } from '@/lib/team-authorization';
+import { getTeamAccess } from '@/lib/team-access';
 
 export const dynamic = 'force-dynamic';
 
-export async function PATCH(
-  request: NextRequest,
-  { params }: { params: { teamId: string; memberId: string } },
-) {
+type Params = { params: { teamId: string; memberId: string } };
+
+const isOrgManager = (role: string) => role === 'owner' || role === 'manager';
+
+export async function PATCH(request: NextRequest, { params }: Params) {
   try {
     const user = await getUserFromRequest(request);
     if (!user) {
@@ -22,53 +29,43 @@ export async function PATCH(
 
     const supabase = createServerClient();
 
-    // Get user's org
-    const orgContext = await getUserOrganizationContext(supabase, user.userId);
-    if (!orgContext) {
-      return NextResponse.json({ error: 'User has no organization' }, { status: 403 });
-    }
-
-    // Verify team belongs to org
-    const teamValid = await teamBelongsToOrganization(
-      supabase,
-      params.teamId,
-      orgContext.organizationId,
-    );
-    if (!teamValid) {
+    const access = await getTeamAccess(supabase, user.userId, params.teamId);
+    if (!access) {
       return NextResponse.json({ error: 'Team not found' }, { status: 404 });
     }
-
-    // Check if user can manage team
-    const canManage = await canManageTeam(
-      supabase,
-      user.userId,
-      params.teamId,
-      orgContext.organizationId,
-    );
-    if (!canManage) {
+    if (!access.canManage) {
       return NextResponse.json(
         { error: 'You do not have permission to manage this team' },
         { status: 403 },
       );
     }
+    if (!isOrgManager(access.orgRole)) {
+      return NextResponse.json(
+        { error: 'Only organization owners and managers can change roles' },
+        { status: 403 },
+      );
+    }
 
-    const body = await request.json();
-    const { role } = body as { role?: string };
+    const body = (await request.json().catch(() => null)) as { role?: string } | null;
+    const role = body?.role;
 
     if (!role || !['team_lead', 'member'].includes(role)) {
       return NextResponse.json({ error: 'Invalid role' }, { status: 400 });
     }
 
-    // Update member role
     const { data: member, error } = await supabase
       .from('team_members')
       .update({ role, updated_at: new Date().toISOString() })
       .eq('id', params.memberId)
       .eq('team_id', params.teamId)
       .select('id, team_id, user_id, role, created_at, updated_at')
-      .single();
+      .maybeSingle();
 
-    if (error || !member) {
+    if (error) {
+      console.error('Failed to update member role:', error);
+      return NextResponse.json({ error: 'Failed to update role' }, { status: 500 });
+    }
+    if (!member) {
       return NextResponse.json({ error: 'Member not found' }, { status: 404 });
     }
 
@@ -79,10 +76,7 @@ export async function PATCH(
   }
 }
 
-export async function DELETE(
-  request: NextRequest,
-  { params }: { params: { teamId: string; memberId: string } },
-) {
+export async function DELETE(request: NextRequest, { params }: Params) {
   try {
     const user = await getUserFromRequest(request);
     if (!user) {
@@ -91,40 +85,20 @@ export async function DELETE(
 
     const supabase = createServerClient();
 
-    // Get user's org
-    const orgContext = await getUserOrganizationContext(supabase, user.userId);
-    if (!orgContext) {
-      return NextResponse.json({ error: 'User has no organization' }, { status: 403 });
-    }
-
-    // Verify team belongs to org
-    const teamValid = await teamBelongsToOrganization(
-      supabase,
-      params.teamId,
-      orgContext.organizationId,
-    );
-    if (!teamValid) {
+    const access = await getTeamAccess(supabase, user.userId, params.teamId);
+    if (!access) {
       return NextResponse.json({ error: 'Team not found' }, { status: 404 });
     }
-
-    // Check if user can manage team
-    const canManage = await canManageTeam(
-      supabase,
-      user.userId,
-      params.teamId,
-      orgContext.organizationId,
-    );
-    if (!canManage) {
+    if (!access.canManage) {
       return NextResponse.json(
         { error: 'You do not have permission to manage this team' },
         { status: 403 },
       );
     }
 
-    // Get member to verify existence
     const { data: member, error: getError } = await supabase
       .from('team_members')
-      .select('user_id')
+      .select('id, user_id, role')
       .eq('id', params.memberId)
       .eq('team_id', params.teamId)
       .maybeSingle();
@@ -133,7 +107,6 @@ export async function DELETE(
       return NextResponse.json({ error: 'Member not found' }, { status: 404 });
     }
 
-    // Don't allow manager to remove themselves (would leave team leaderless)
     if (member.user_id === user.userId) {
       return NextResponse.json(
         { error: 'You cannot remove yourself from the team' },
@@ -141,11 +114,18 @@ export async function DELETE(
       );
     }
 
-    // Remove member from team
+    if (member.role === 'team_lead' && !isOrgManager(access.orgRole)) {
+      return NextResponse.json(
+        { error: 'Only organization owners and managers can remove a team lead' },
+        { status: 403 },
+      );
+    }
+
     const { error: deleteError } = await supabase
       .from('team_members')
       .delete()
-      .eq('id', params.memberId);
+      .eq('id', params.memberId)
+      .eq('team_id', params.teamId);
 
     if (deleteError) {
       console.error('Failed to remove team member:', deleteError);

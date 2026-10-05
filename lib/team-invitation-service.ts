@@ -228,18 +228,27 @@ export class TeamInvitationService {
     }
 
     // Mark accepted (guard on status so a double-click can't re-accept)
-    const { error: updateError } = await this.supabase
+    const { data: updateData, error: updateError, count } = await this.supabase
       .from('team_invitations')
       .update({
         status: 'accepted',
         accepted_at: new Date().toISOString(),
       })
       .eq('id', invitation.id)
-      .eq('status', 'pending');
+      .eq('status', 'pending')
+      .select();
 
     if (updateError) {
       throw new Error(`Failed to update invitation: ${updateError.message}`);
     }
+
+    // Verify the update actually applied (count should be 1)
+    // If count is 0, it means status was already changed (race condition or double-click)
+    if (!updateData || updateData.length === 0) {
+      throw new Error('Invitation was already accepted. This token is no longer valid.');
+    }
+
+    console.log(`[acceptInvitation] Invitation ${invitation.id} successfully marked as accepted`);
   }
 
   async hasPendingInvitation(email: string, teamId: string): Promise<boolean> {

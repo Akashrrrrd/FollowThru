@@ -18,6 +18,7 @@
 
 import { NextRequest, NextResponse } from 'next/server';
 import { createServerClient, getUserFromRequest } from '@/lib/supabase-server';
+import { verifyCommitmentsBelongToOrg } from '@/lib/org-isolation-guard';
 import {
   executeBulkAction,
   fetchCommitmentsByIds,
@@ -116,6 +117,18 @@ export async function POST(req: NextRequest) {
     const organizationId = Array.from(orgIds)[0];
     if (!organizationId) {
       return NextResponse.json({ error: 'Commitments not found' }, { status: 404 });
+    }
+
+    // EXPLICIT ORG ISOLATION CHECK: Verify all commitments belong to this org
+    // (Defense in depth - RLS also enforces this at database level)
+    try {
+      await verifyCommitmentsBelongToOrg(supabase, commitmentIds, organizationId);
+    } catch (isolationError) {
+      console.warn('[Bulk Action API] Org isolation guard triggered:', isolationError);
+      return NextResponse.json(
+        { error: 'Unauthorized access attempt detected' },
+        { status: 403 },
+      );
     }
 
     /* ---------------- Authorization ---------------- */

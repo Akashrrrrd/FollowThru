@@ -183,6 +183,77 @@ export async function getTeamMembersWithProfiles(
 }
 
 /**
+ * List all members of a team with full identity info (profile + email).
+ * Used by API endpoints that need to return user identity details.
+ * Batch-fetches all profiles at once (2 queries: members + profiles).
+ * Does NOT call supabase.auth.admin.getUserById() (N+1 killer).
+ */
+export async function getTeamMembersWithIdentity(
+  supabase: SupabaseClient,
+  teamId: string,
+): Promise<
+  Array<{
+    id: string;
+    team_id: string;
+    user_id: string;
+    role: 'team_lead' | 'member';
+    created_at: string;
+    user: {
+      id: string;
+      email: string | null;
+      display_name: string | null;
+      full_name: string | null;
+    };
+  }>
+> {
+  const { data: members, error: membersError } = await supabase
+    .from('team_members')
+    .select('id, team_id, user_id, role, created_at')
+    .eq('team_id', teamId)
+    .order('created_at', { ascending: true });
+
+  if (membersError || !members) {
+    console.error('Failed to get team members:', membersError);
+    return [];
+  }
+  if (members.length === 0) return [];
+
+  // Fetch all profiles at once (not N+1)
+  const { data: profiles, error: profilesError } = await supabase
+    .from('user_profiles')
+    .select('id, display_name, full_name, email')
+    .in(
+      'id',
+      members.map((m) => m.user_id),
+    );
+
+  if (profilesError) {
+    console.error('Failed to get user profiles:', profilesError);
+  }
+
+  const profileMap = new Map(
+    (profiles ?? []).map((p) => [
+      p.id,
+      { email: p.email, display_name: p.display_name, full_name: p.full_name },
+    ]),
+  );
+
+  return members.map((m) => ({
+    id: m.id,
+    team_id: m.team_id,
+    user_id: m.user_id,
+    role: m.role as 'team_lead' | 'member',
+    created_at: m.created_at,
+    user: {
+      id: m.user_id,
+      email: profileMap.get(m.user_id)?.email ?? null,
+      display_name: profileMap.get(m.user_id)?.display_name ?? null,
+      full_name: profileMap.get(m.user_id)?.full_name ?? null,
+    },
+  }));
+}
+
+/**
  * Check if user has the team lead role for a team.
  */
 export async function isTeamLead(

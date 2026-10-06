@@ -9,6 +9,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createServerClient, getUserFromRequest } from '@/lib/supabase-server';
 import { getTeamAccess } from '@/lib/team-access';
+import { getTeamMembersWithIdentity } from '@/lib/team-context';
 import { TeamInvitationService } from '@/lib/team-invitation-service';
 import {
   generateTeamInvitationEmailHtml,
@@ -19,42 +20,6 @@ import { EmailProvider } from '@/lib/email-provider';
 export const dynamic = 'force-dynamic';
 
 type Supabase = ReturnType<typeof createServerClient>;
-
-async function resolveIdentity(supabase: Supabase, userId: string) {
-  let email: string | null = null;
-  let displayName: string | null = null;
-  let fullName: string | null = null;
-
-  const [profileResult, authResult] = await Promise.all([
-    supabase
-      .from('user_profiles')
-      .select('display_name, full_name')
-      .eq('id', userId)
-      .maybeSingle(),
-    supabase.auth.admin.getUserById(userId).catch((err: unknown) => {
-      console.warn(`Failed to resolve auth user ${userId}:`, err);
-      return null;
-    }),
-  ]);
-
-  if (profileResult.error) {
-    console.warn(`Failed to fetch profile for ${userId}:`, profileResult.error);
-  }
-  if (profileResult.data) {
-    displayName = profileResult.data.display_name || null;
-    fullName = profileResult.data.full_name || null;
-  }
-
-  if (authResult) {
-    if (authResult.error) {
-      console.warn(`Failed to fetch auth user ${userId}:`, authResult.error);
-    } else {
-      email = authResult.data?.user?.email ?? null;
-    }
-  }
-
-  return { id: userId, email, display_name: displayName, full_name: fullName };
-}
 
 /** Find an auth user by (lower-cased) email, paging through all users. */
 async function findAuthUserByEmail(supabase: Supabase, email: string) {
@@ -87,27 +52,17 @@ export async function GET(
       return NextResponse.json({ error: 'Team not found' }, { status: 404 });
     }
 
-    const { data: members, error: membersError } = await supabase
-      .from('team_members')
-      .select('id, team_id, user_id, role, created_at')
-      .eq('team_id', params.teamId)
-      .order('created_at', { ascending: true });
+    // Use optimized batch fetch instead of Promise.all + N+1 calls
+    const membersWithIdentity = await getTeamMembersWithIdentity(supabase, params.teamId);
 
-    if (membersError) {
-      console.error('Failed to fetch team members:', membersError);
-      return NextResponse.json({ error: 'Failed to load team members' }, { status: 500 });
-    }
-
-    const formattedMembers = await Promise.all(
-      (members ?? []).map(async (member) => ({
-        id: member.id,
-        team_id: member.team_id,
-        user_id: member.user_id,
-        role: member.role,
-        created_at: member.created_at,
-        user: await resolveIdentity(supabase, member.user_id),
-      })),
-    );
+    const formattedMembers = membersWithIdentity.map((member) => ({
+      id: member.id,
+      team_id: member.team_id,
+      user_id: member.user_id,
+      role: member.role,
+      created_at: member.created_at,
+      user: member.user,
+    }));
 
     // Pending invitations are only visible to people who can manage the team.
     let invitations: unknown[] = [];
@@ -241,10 +196,22 @@ export async function POST(
         return NextResponse.json({ error: 'Failed to add team member' }, { status: 500 });
       }
 
+      // Fetch full user details for response
+      const { data: userProfile } = await supabase
+        .from('user_profiles')
+        .select('id, email, display_name, full_name')
+        .eq('id', targetUserId)
+        .maybeSingle();
+
       return NextResponse.json(
         {
           ...member,
-          user: await resolveIdentity(supabase, targetUserId),
+          user: {
+            id: targetUserId,
+            email: userProfile?.email ?? null,
+            display_name: userProfile?.display_name ?? null,
+            full_name: userProfile?.full_name ?? null,
+          },
           message: 'Member added to team',
         },
         { status: 201 },

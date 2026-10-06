@@ -43,13 +43,13 @@ interface NotificationPreferencesProps {
 }
 
 const notificationTypes = [
-  { key: 'assignment', label: 'New Assignment', description: 'When a task is assigned to you' },
-  { key: 'due_soon', label: 'Due Soon', description: 'Reminder when a task is due within 24 hours' },
-  { key: 'due_1h', label: 'Due in 1 Hour', description: 'Urgent reminder when a task is due within 1 hour' },
-  { key: 'overdue', label: 'Overdue', description: 'Alert when a task becomes overdue' },
-  { key: 'escalation', label: 'Escalation', description: 'When a task is escalated to you' },
-  { key: 'status_change', label: 'Status Change', description: 'When a task status changes' },
-  { key: 'completion', label: 'Task Completion', description: 'When someone completes a task you care about' },
+  { key: 'assignment', label: 'New Assignment', description: 'When a commitment is assigned to you' },
+  { key: 'due_soon', label: 'Due Soon', description: 'Reminder when a commitment is due within 24 hours' },
+  { key: 'due_1h', label: 'Due in 1 Hour', description: 'Urgent reminder when a commitment is due within 1 hour' },
+  { key: 'overdue', label: 'Overdue', description: 'Alert when a commitment becomes overdue' },
+  { key: 'escalation', label: 'Escalation', description: 'When a commitment is escalated to you' },
+  { key: 'status_change', label: 'Status Change', description: 'When a commitment status changes' },
+  { key: 'completion', label: 'Commitment Completion', description: 'When someone completes a commitment you care about' },
 ];
 
 export function NotificationPreferences({ onSave }: NotificationPreferencesProps) {

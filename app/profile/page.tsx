@@ -540,7 +540,7 @@ function ProfileContent() {
         >
           <div className="mb-2 flex items-center justify-between text-sm">
             <span className="text-slate-600">
-              {stats.myDoneTasks} of {stats.myTasks} assigned tasks completed
+              {stats.myDoneTasks} of {stats.myTasks} assigned commitments completed
             </span>
             <span className="font-semibold text-slate-900">{stats.myEfficiency}%</span>
           </div>

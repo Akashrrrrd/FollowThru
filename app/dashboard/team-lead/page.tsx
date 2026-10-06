@@ -279,7 +279,7 @@ function TeamLeadDashboardContent() {
 
             {dashboard.members.length === 0 ? (
               <div className="px-6 py-8 text-center">
-                <p className="text-sm text-slate-500">No team members with assigned tasks</p>
+                <p className="text-sm text-slate-500">No team members with assigned commitments</p>
               </div>
             ) : (
               <div className="divide-y divide-slate-200">

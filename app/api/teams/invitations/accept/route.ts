@@ -7,6 +7,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { createServerClient, getUserFromRequest } from '@/lib/supabase-server';
 import { TeamInvitationService } from '@/lib/team-invitation-service';
 import { removeUnusedPersonalOrganizations } from '@/lib/personal-org-cleanup';
+import { invitationAcceptLimiter, getClientIp, makeRateLimitKey } from '@/lib/rate-limiter';
 
 export const dynamic = 'force-dynamic';
 
@@ -16,6 +17,23 @@ export async function POST(request: NextRequest) {
 
     if (!user) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+    }
+
+    // Rate limiting: prevent brute-force token guessing
+    const clientIp = getClientIp(request);
+    const rateLimitKey = makeRateLimitKey(clientIp, 'invitations/accept');
+    const rateLimitCheck = invitationAcceptLimiter.check(rateLimitKey);
+
+    if (!rateLimitCheck.allowed) {
+      return NextResponse.json(
+        { error: 'Too many invitation acceptance attempts. Please try again later.' },
+        {
+          status: 429,
+          headers: {
+            'Retry-After': String(rateLimitCheck.retryAfter || 60),
+          },
+        }
+      );
     }
 
     const body = (await request.json().catch(() => null)) as { token?: string } | null;

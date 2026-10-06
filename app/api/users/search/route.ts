@@ -19,6 +19,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createServerClient, getUserFromRequest } from '@/lib/supabase-server';
 import { getUserOrganizationContext } from '@/lib/organization-context';
+import { userSearchLimiter, getClientIp, makeRateLimitKey } from '@/lib/rate-limiter';
 
 export const dynamic = 'force-dynamic';
 
@@ -28,6 +29,23 @@ export async function GET(request: NextRequest) {
 
     if (!user) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+    }
+
+    // Rate limiting: prevent enumeration attacks via search
+    const clientIp = getClientIp(request);
+    const rateLimitKey = makeRateLimitKey(clientIp, 'users/search');
+    const rateLimitCheck = userSearchLimiter.check(rateLimitKey);
+
+    if (!rateLimitCheck.allowed) {
+      return NextResponse.json(
+        { error: 'Too many search requests. Please try again later.' },
+        {
+          status: 429,
+          headers: {
+            'Retry-After': String(rateLimitCheck.retryAfter || 60),
+          },
+        }
+      );
     }
 
     const query = new URL(request.url).searchParams.get('q')?.trim();

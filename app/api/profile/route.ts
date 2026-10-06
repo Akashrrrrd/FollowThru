@@ -5,6 +5,7 @@ import { getUserOrganizationContext } from '@/lib/organization-context';
 import { ensureUserInDefaultTeam } from '@/lib/team-migration';
 import { getUserTeamContext } from '@/lib/team-context';
 import { sanitizeProfileInput } from '@/lib/profile-validation';
+import { profileUpdateLimiter, getClientIp, makeRateLimitKey } from '@/lib/rate-limiter';
 
 export const dynamic = 'force-dynamic';
 
@@ -200,6 +201,23 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
   }
 
+  // Rate limiting: prevent spam profile updates
+  const clientIp = getClientIp(request);
+  const rateLimitKey = makeRateLimitKey(clientIp, 'profile/post');
+  const rateLimitCheck = profileUpdateLimiter.check(rateLimitKey);
+
+  if (!rateLimitCheck.allowed) {
+    return NextResponse.json(
+      { error: 'Too many profile update requests. Please try again later.' },
+      {
+        status: 429,
+        headers: {
+          'Retry-After': String(rateLimitCheck.retryAfter || 60),
+        },
+      }
+    );
+  }
+
   const supabase = createServerClient();
 
   try {
@@ -234,6 +252,23 @@ export async function PATCH(request: NextRequest) {
   const user = await getUserFromRequest(request);
   if (!user) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+  }
+
+  // Rate limiting: prevent spam profile updates
+  const clientIp = getClientIp(request);
+  const rateLimitKey = makeRateLimitKey(clientIp, 'profile/patch');
+  const rateLimitCheck = profileUpdateLimiter.check(rateLimitKey);
+
+  if (!rateLimitCheck.allowed) {
+    return NextResponse.json(
+      { error: 'Too many profile update requests. Please try again later.' },
+      {
+        status: 429,
+        headers: {
+          'Retry-After': String(rateLimitCheck.retryAfter || 60),
+        },
+      }
+    );
   }
 
   const supabase = createServerClient();

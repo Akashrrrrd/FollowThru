@@ -140,11 +140,6 @@ export class TeamInvitationService {
       throw new Error('Invalid or expired invitation');
     }
 
-    // Check if token has already been used (single-use enforcement)
-    if (invitation.token_used_at) {
-      throw new Error('Invalid or expired invitation: token already used');
-    }
-
     if (
       !userEmail ||
       userEmail.toLowerCase().trim() !== invitation.email.toLowerCase().trim()

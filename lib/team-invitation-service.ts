@@ -19,6 +19,7 @@ export interface TeamInvitation {
   status: 'pending' | 'accepted' | 'rejected' | 'expired';
   token: string;
   token_expires_at: string;
+  token_used_at: string | null;
   accepted_at: string | null;
   created_at: string;
   updated_at: string;
@@ -117,10 +118,12 @@ export class TeamInvitationService {
    *
    * - The signed-in user's email must match the invited email.
    * - The team must still exist and belong to the invitation's organization.
+   * - The token must not have been used before (single-use enforcement).
    * - Invited people are usually new users who are not yet in the organization, so
    *   accepting adds them to the organization (as a regular member) first. The invitation
    *   was issued by an org manager / team lead, so the token itself is the authorization.
    * - Then the user is added to the team with the invited role.
+   * - The token_used_at is set atomically with the status update to enforce single-use.
    * - Safe to retry: every step is idempotent, and the invitation is marked accepted last.
    *
    * Error messages containing "Invalid or expired" are mapped to HTTP 400 by the route;
@@ -135,6 +138,11 @@ export class TeamInvitationService {
 
     if (!invitation) {
       throw new Error('Invalid or expired invitation');
+    }
+
+    // Check if token has already been used (single-use enforcement)
+    if (invitation.token_used_at) {
+      throw new Error('Invalid or expired invitation: token already used');
     }
 
     if (
@@ -214,15 +222,19 @@ export class TeamInvitationService {
       }
     }
 
-    // Mark accepted (guarded on status so a double-click can't re-accept)
+    // Mark accepted and set token_used_at atomically (single-use enforcement)
+    // Guarded on status so a double-click can't re-accept
+    const now = new Date().toISOString();
     const { data: updateData, error: updateError } = await this.supabase
       .from('team_invitations')
       .update({
         status: 'accepted',
-        accepted_at: new Date().toISOString(),
+        accepted_at: now,
+        token_used_at: now,
       })
       .eq('id', invitation.id)
       .eq('status', 'pending')
+      .is('token_used_at', null)  // Guard: only if token hasn't been used yet
       .select();
 
     if (updateError) {

@@ -107,25 +107,28 @@ export class OrganizationDashboardService {
     // Step 4: Calculate organization-wide metrics
     const summary = this.calculateMetrics(tasks || []);
 
-    // Step 5: Batch-fetch all team member counts (eliminates N+1 query pattern)
-    // Get all team IDs and fetch member counts in a single aggregated query
+    // Step 5: Batch-fetch all team member counts using database aggregation
+    // OPTIMIZATION: Use COUNT(*) GROUP BY at DB level instead of fetching all rows
     const teamIds = (teams || []).map((t) => t.id);
-    const { data: teamMemberCounts, error: memberCountError } = await this.supabase
-      .from('team_members')
-      .select('team_id')
-      .in('team_id', teamIds);
+    
+    let memberCountByTeam = new Map<string, number>();
+    
+    if (teamIds.length > 0) {
+      // Fetch aggregated counts directly from database
+      // This returns ~teamIds.length rows instead of (potentially) hundreds
+      const { data: counts, error: memberCountError } = await this.supabase
+        .rpc('get_team_member_counts', { team_ids: teamIds });
 
-    if (memberCountError) {
-      console.error('[org-dashboard] Team members count query error:', memberCountError);
-      // Gracefully degrade: use 0 as member count
+      if (memberCountError) {
+        console.error('[org-dashboard] Team members count query error:', memberCountError);
+        // Gracefully degrade: use 0 as member count for all teams
+      } else if (counts && Array.isArray(counts)) {
+        // Build map from aggregated results
+        counts.forEach((row: any) => {
+          memberCountByTeam.set(row.team_id, row.member_count || 0);
+        });
+      }
     }
-
-    // Build a map of team_id -> member count
-    const memberCountByTeam = new Map<string, number>();
-    (teamMemberCounts || []).forEach((member) => {
-      const count = memberCountByTeam.get(member.team_id) ?? 0;
-      memberCountByTeam.set(member.team_id, count + 1);
-    });
 
     // Step 6: Build per-team metrics
     const teamMetrics: TeamMetrics[] = [];

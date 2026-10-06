@@ -113,7 +113,7 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    const organizationId = [...orgIds][0];
+    const organizationId = Array.from(orgIds)[0];
     if (!organizationId) {
       return NextResponse.json({ error: 'Commitments not found' }, { status: 404 });
     }

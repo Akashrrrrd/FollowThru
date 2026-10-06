@@ -116,19 +116,21 @@ export class TeamInvitationService {
    * Accept an invitation.
    *
    * - The signed-in user's email must match the invited email.
-   * - Invited people are usually brand-new users who are not yet in the
-   *   organization, so accepting adds them to the organization (as a
-   *   regular member) first. The invitation was issued by an org manager,
-   *   so the token itself is the authorization.
-   * - After accepting, ensure user is added to the default team.
+   * - The team must still exist and belong to the invitation's organization.
+   * - Invited people are usually new users who are not yet in the organization, so
+   *   accepting adds them to the organization (as a regular member) first. The invitation
+   *   was issued by an org manager / team lead, so the token itself is the authorization.
+   * - Then the user is added to the team with the invited role.
+   * - Safe to retry: every step is idempotent, and the invitation is marked accepted last.
+   *
+   * Error messages containing "Invalid or expired" are mapped to HTTP 400 by the route;
+   * "email mismatch" is mapped to 403.
    */
   async acceptInvitation(
     token: string,
     userId: string,
     userEmail: string | null,
   ): Promise<void> {
-    console.log(`[acceptInvitation] Accepting invitation for user ${userId} email ${userEmail}`);
-    
     const invitation = await this.getInvitationByToken(token);
 
     if (!invitation) {
@@ -142,6 +144,20 @@ export class TeamInvitationService {
       throw new Error('Invitation email mismatch');
     }
 
+    // The team must still exist and sit in the invitation's organization
+    const { data: team, error: teamError } = await this.supabase
+      .from('teams')
+      .select('id, organization_id')
+      .eq('id', invitation.team_id)
+      .maybeSingle();
+
+    if (teamError) {
+      throw new Error(`Failed to verify team: ${teamError.message}`);
+    }
+    if (!team || team.organization_id !== invitation.organization_id) {
+      throw new Error('Invalid or expired invitation: team no longer available');
+    }
+
     // Ensure organization membership
     const { data: orgMember, error: orgError } = await this.supabase
       .from('organization_members')
@@ -151,40 +167,22 @@ export class TeamInvitationService {
       .maybeSingle();
 
     if (orgError) {
-      console.error(`[acceptInvitation] Failed to check org membership:`, orgError);
+      console.error('[acceptInvitation] Failed to check org membership:', orgError);
       throw new Error(`Failed to verify organization membership: ${orgError.message}`);
     }
 
     if (!orgMember) {
-      console.log(`[acceptInvitation] User ${userId} not in org ${invitation.organization_id}, adding...`);
-      const { data: insertedMember, error: joinError } = await this.supabase
-        .from('organization_members')
-        .insert({
-          user_id: userId,
-          organization_id: invitation.organization_id,
-          role: 'member',
-        })
-        .select();
+      const { error: joinError } = await this.supabase.from('organization_members').insert({
+        user_id: userId,
+        organization_id: invitation.organization_id,
+        role: 'member',
+      });
 
       // 23505 = already a member (race) -> fine
       if (joinError && joinError.code !== '23505') {
-        console.error(`[acceptInvitation] Failed to join org:`, joinError);
+        console.error('[acceptInvitation] Failed to join org:', joinError);
         throw new Error(`Failed to join organization: ${joinError.message}`);
       }
-      
-      if (insertedMember?.length) {
-        console.log(`[acceptInvitation] Successfully added user ${userId} to org ${invitation.organization_id}`);
-      } else if (joinError?.code === '23505') {
-        console.log(`[acceptInvitation] User ${userId} already in org ${invitation.organization_id} (duplicate key)`);
-      }
-
-      // Small delay to allow database write to propagate through RLS layer.
-      // This is minimal (10ms) and only necessary if insert was just performed.
-      if (insertedMember?.length) {
-        await new Promise(resolve => setTimeout(resolve, 10));
-      }
-    } else {
-      console.log(`[acceptInvitation] User ${userId} already in org ${invitation.organization_id}`);
     }
 
     // Add to team if not already a member
@@ -200,35 +198,24 @@ export class TeamInvitationService {
     }
 
     if (!existingMember) {
-      console.log(`[acceptInvitation] User ${userId} not yet in team ${invitation.team_id}, inserting...`);
-      const { data: insertData, error: insertError } = await this.supabase
-        .from('team_members')
-        .insert({
-          team_id: invitation.team_id,
-          user_id: userId,
-          role: invitation.role,
-        })
-        .select();
+      const { error: insertError } = await this.supabase.from('team_members').insert({
+        team_id: invitation.team_id,
+        user_id: userId,
+        role: invitation.role,
+      });
 
+      // 23505 = already in the team (race) -> fine
       if (insertError && insertError.code !== '23505') {
-        console.error(`[acceptInvitation] Failed to add user ${userId} to team ${invitation.team_id}:`, insertError);
-        console.error(`[acceptInvitation] Insert error code: ${insertError.code}`);
-        console.error(`[acceptInvitation] Insert error details:`, JSON.stringify(insertError, null, 2));
+        console.error(
+          `[acceptInvitation] Failed to add user ${userId} to team ${invitation.team_id}:`,
+          insertError,
+        );
         throw new Error(`Failed to add user to team: ${insertError.message}`);
       }
-      
-      if (insertError && insertError.code === '23505') {
-        console.log(`[acceptInvitation] User ${userId} already in team ${invitation.team_id} (duplicate key error - race condition)`);
-      } else {
-        console.log(`[acceptInvitation] Successfully added user ${userId} to team ${invitation.team_id} with role ${invitation.role}`);
-        console.log(`[acceptInvitation] Insert result:`, JSON.stringify(insertData, null, 2));
-      }
-    } else {
-      console.log(`[acceptInvitation] User ${userId} already a member of team ${invitation.team_id}`);
     }
 
-    // Mark accepted (guard on status so a double-click can't re-accept)
-    const { data: updateData, error: updateError, count } = await this.supabase
+    // Mark accepted (guarded on status so a double-click can't re-accept)
+    const { data: updateData, error: updateError } = await this.supabase
       .from('team_invitations')
       .update({
         status: 'accepted',
@@ -242,13 +229,10 @@ export class TeamInvitationService {
       throw new Error(`Failed to update invitation: ${updateError.message}`);
     }
 
-    // Verify the update actually applied (count should be 1)
-    // If count is 0, it means status was already changed (race condition or double-click)
+    // No row updated: it was already accepted/changed (double-click or race)
     if (!updateData || updateData.length === 0) {
-      throw new Error('Invitation was already accepted. This token is no longer valid.');
+      throw new Error('Invalid or expired invitation: already accepted');
     }
-
-    console.log(`[acceptInvitation] Invitation ${invitation.id} successfully marked as accepted`);
   }
 
   async hasPendingInvitation(email: string, teamId: string): Promise<boolean> {

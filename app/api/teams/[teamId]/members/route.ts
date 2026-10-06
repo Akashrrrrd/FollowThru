@@ -6,7 +6,7 @@
  * to several organizations can still see the members of teams they belong to.
  */
 
-import { NextRequest, NextResponse } from 'next/server';
+import { NextRequest } from 'next/server';
 import { createServerClient, getUserFromRequest } from '@/lib/supabase-server';
 import { getTeamAccess } from '@/lib/team-access';
 import { getTeamMembersWithIdentity } from '@/lib/team-context';
@@ -16,6 +16,17 @@ import {
   generateTeamInvitationEmailText,
 } from '@/lib/email-templates/team-invitation';
 import { EmailProvider } from '@/lib/email-provider';
+import { AddTeamMemberSchema, validateRequest } from '@/lib/validation-schemas';
+import {
+  unauthorized,
+  notFound,
+  insufficientPermissions,
+  validationError,
+  conflict,
+  internalError,
+  createdResponse,
+  successResponse,
+} from '@/lib/api-response';
 
 export const dynamic = 'force-dynamic';
 
@@ -41,7 +52,7 @@ export async function GET(
   try {
     const user = await getUserFromRequest(request);
     if (!user) {
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+      return unauthorized();
     }
 
     const supabase = createServerClient();
@@ -49,7 +60,7 @@ export async function GET(
     // Team must exist and the user must belong to the team's organization.
     const access = await getTeamAccess(supabase, user.userId, params.teamId);
     if (!access) {
-      return NextResponse.json({ error: 'Team not found' }, { status: 404 });
+      return notFound('Team not found');
     }
 
     // Use optimized batch fetch instead of Promise.all + N+1 calls
@@ -76,7 +87,7 @@ export async function GET(
       }
     }
 
-    return NextResponse.json({
+    return successResponse({
       members: formattedMembers,
       invitations,
       // Permissions for the CURRENT user, computed server-side. The UI uses these
@@ -87,7 +98,7 @@ export async function GET(
     });
   } catch (err) {
     console.error('Team members GET error:', err);
-    return NextResponse.json({ error: 'Internal server error' }, { status: 500 });
+    return internalError();
   }
 }
 
@@ -98,51 +109,38 @@ export async function POST(
   try {
     const user = await getUserFromRequest(request);
     if (!user) {
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+      return unauthorized();
     }
 
     const supabase = createServerClient();
 
     const access = await getTeamAccess(supabase, user.userId, params.teamId);
     if (!access) {
-      return NextResponse.json({ error: 'Team not found' }, { status: 404 });
+      return notFound('Team not found');
     }
     if (!access.canManage) {
-      return NextResponse.json(
-        { error: 'You do not have permission to manage this team' },
-        { status: 403 },
-      );
+      return insufficientPermissions('team');
     }
 
-    const body = await request.json();
-    const { email, userId: providedUserId, role } = body as {
-      email?: string;
-      userId?: string;
-      role?: string;
-    };
+    const body = await request.json().catch(() => null);
 
-    if (!role || !['team_lead', 'member'].includes(role)) {
-      return NextResponse.json({ error: 'Invalid role' }, { status: 400 });
+    // Validate request body
+    const validation = validateRequest(AddTeamMemberSchema, body);
+    if (!validation.valid) {
+      return validationError(validation.error);
     }
 
     // Resolve the target: an existing user (by id or email) or a new email to invite.
-    let targetUserId: string | undefined =
-      typeof providedUserId === 'string' ? providedUserId : undefined;
-    let normalizedEmail: string | null = null;
+    let targetUserId: string | undefined = validation.data.userId;
+    let normalizedEmail: string | null = validation.data.email ?? null;
 
-    if (!targetUserId) {
-      if (!email || typeof email !== 'string' || !email.trim()) {
-        return NextResponse.json({ error: 'email or userId is required' }, { status: 400 });
-      }
-
-      normalizedEmail = email.trim().toLowerCase();
-
+    if (!targetUserId && normalizedEmail) {
       try {
         const foundUser = await findAuthUserByEmail(supabase, normalizedEmail);
         if (foundUser) targetUserId = foundUser.id;
       } catch (err) {
         console.error('Failed to lookup user:', err);
-        return NextResponse.json({ error: 'Failed to lookup user' }, { status: 500 });
+        return internalError('Failed to lookup user');
       }
     }
 
@@ -159,19 +157,13 @@ export async function POST(
 
       if (orgError) {
         console.error('Failed to verify organization membership:', orgError);
-        return NextResponse.json(
-          { error: 'Failed to verify user organization membership' },
-          { status: 500 },
-        );
+        return internalError('Failed to verify user organization membership');
       }
 
       isOrgMember = !!orgMember;
 
       if (!isOrgMember && !normalizedEmail) {
-        return NextResponse.json(
-          { error: 'User is not a member of this organization' },
-          { status: 400 },
-        );
+        return validationError('User is not a member of this organization');
       }
     }
 
@@ -181,19 +173,16 @@ export async function POST(
     if (targetUserId && isOrgMember) {
       const { data: member, error } = await supabase
         .from('team_members')
-        .insert({ team_id: params.teamId, user_id: targetUserId, role })
+        .insert({ team_id: params.teamId, user_id: targetUserId, role: validation.data.role })
         .select('id, team_id, user_id, role, created_at')
         .single();
 
       if (error) {
         if (error.code === '23505') {
-          return NextResponse.json(
-            { error: 'User is already a member of this team' },
-            { status: 400 },
-          );
+          return conflict('User is already a member of this team');
         }
         console.error('Failed to add team member:', error);
-        return NextResponse.json({ error: 'Failed to add team member' }, { status: 500 });
+        return internalError('Failed to add team member');
       }
 
       // Fetch full user details for response
@@ -203,7 +192,7 @@ export async function POST(
         .eq('id', targetUserId)
         .maybeSingle();
 
-      return NextResponse.json(
+      return createdResponse(
         {
           ...member,
           user: {
@@ -212,24 +201,20 @@ export async function POST(
             display_name: userProfile?.display_name ?? null,
             full_name: userProfile?.full_name ?? null,
           },
-          message: 'Member added to team',
         },
-        { status: 201 },
+        'Member added to team'
       );
     }
 
     // ---- New email: create an invitation and send the email ----
     if (!normalizedEmail) {
-      return NextResponse.json({ error: 'Invalid request' }, { status: 400 });
+      return validationError('Invalid request');
     }
 
     const invitationService = new TeamInvitationService(supabase);
 
     if (await invitationService.hasPendingInvitation(normalizedEmail, params.teamId)) {
-      return NextResponse.json(
-        { error: 'Invitation already sent to this email' },
-        { status: 400 },
-      );
+      return conflict('Invitation already sent to this email');
     }
 
     const [{ data: teamData }, { data: inviterProfile }, { data: orgData }] =
@@ -251,7 +236,7 @@ export async function POST(
       teamId: params.teamId,
       organizationId: access.organizationId,
       email: normalizedEmail,
-      role: role as 'team_lead' | 'member',
+      role: validation.data.role,
       invitedBy: user.userId,
     });
 
@@ -287,25 +272,23 @@ export async function POST(
       });
     } catch (emailError) {
       console.error('Failed to send invitation email:', emailError);
-      return NextResponse.json(
+      return createdResponse(
         {
           invitation: invitationSummary,
           warning:
             'Invitation created but the email could not be delivered. Please try again or contact an administrator.',
-        },
-        { status: 201 },
+        }
       );
     }
 
-    return NextResponse.json(
+    return createdResponse(
       {
         invitation: invitationSummary,
         message: `Invitation sent to ${normalizedEmail}`,
-      },
-      { status: 201 },
+      }
     );
   } catch (err) {
     console.error('Team members POST error:', err);
-    return NextResponse.json({ error: 'Internal server error' }, { status: 500 });
+    return internalError();
   }
 }

@@ -16,10 +16,18 @@
  * - Debounced on frontend to prevent spam
  */
 
-import { NextRequest, NextResponse } from 'next/server';
+import { NextRequest } from 'next/server';
 import { createServerClient, getUserFromRequest } from '@/lib/supabase-server';
 import { getUserOrganizationContext } from '@/lib/organization-context';
 import { userSearchLimiter, getClientIp, makeRateLimitKey } from '@/lib/rate-limiter';
+import { SearchUserSchema, validateRequest } from '@/lib/validation-schemas';
+import {
+  unauthorized,
+  internalError,
+  validationError,
+  rateLimitExceeded,
+  successResponse,
+} from '@/lib/api-response';
 
 export const dynamic = 'force-dynamic';
 
@@ -28,7 +36,7 @@ export async function GET(request: NextRequest) {
     const user = await getUserFromRequest(request);
 
     if (!user) {
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+      return unauthorized();
     }
 
     // Rate limiting: prevent enumeration attacks via search
@@ -37,25 +45,20 @@ export async function GET(request: NextRequest) {
     const rateLimitCheck = userSearchLimiter.check(rateLimitKey);
 
     if (!rateLimitCheck.allowed) {
-      return NextResponse.json(
-        { error: 'Too many search requests. Please try again later.' },
-        {
-          status: 429,
-          headers: {
-            'Retry-After': String(rateLimitCheck.retryAfter || 60),
-          },
-        }
-      );
+      return rateLimitExceeded('Too many search requests. Please try again later.');
     }
 
-    const query = new URL(request.url).searchParams.get('q')?.trim();
-
-    if (!query || query.length < 2) {
-      return NextResponse.json({
-        results: [],
-        message: 'Query must be at least 2 characters',
-      });
+    const q = new URL(request.url).searchParams.get('q');
+    
+    // Validate query
+    const validation = validateRequest(SearchUserSchema, { q });
+    if (!validation.valid) {
+      return validationError(validation.error);
     }
+
+    // Type-safe extraction
+    const query = validation.data.q as string;
+    const limit = validation.data.limit as number;
 
     const supabase = createServerClient();
 
@@ -63,10 +66,7 @@ export async function GET(request: NextRequest) {
     const orgContext = await getUserOrganizationContext(supabase, user.userId);
 
     if (!orgContext) {
-      return NextResponse.json(
-        { error: 'User has no organization' },
-        { status: 403 }
-      );
+      return validationError('User has no organization');
     }
 
     const searchTerm = query.toLowerCase();
@@ -88,11 +88,11 @@ export async function GET(request: NextRequest) {
           job_title
         `)
         .eq('email', searchTerm)
-        .limit(10);
+        .limit(limit);
 
       if (error) {
         console.error('[/api/users/search] Email search error:', error);
-        return NextResponse.json({ error: 'Search failed' }, { status: 500 });
+        return internalError('Search failed');
       }
 
       results = data || [];
@@ -108,11 +108,11 @@ export async function GET(request: NextRequest) {
           job_title
         `)
         .or(`display_name.ilike.%${searchTerm}%,full_name.ilike.%${searchTerm}%`)
-        .limit(10);
+        .limit(limit);
 
       if (error) {
         console.error('[/api/users/search] Name search error:', error);
-        return NextResponse.json({ error: 'Search failed' }, { status: 500 });
+        return internalError('Search failed');
       }
 
       results = data || [];
@@ -131,7 +131,7 @@ export async function GET(request: NextRequest) {
 
     if (filtered.length === 0) {
       console.log(`[/api/users/search] No results for query: "${query}"`);
-      return NextResponse.json({ results: [] });
+      return successResponse({ results: [] });
     }
 
     // Get organization roles for filtered users
@@ -163,12 +163,9 @@ export async function GET(request: NextRequest) {
 
     console.log(`[/api/users/search] Returning ${enrichedResults.length} results for query: "${query}"`);
 
-    return NextResponse.json({ results: enrichedResults });
+    return successResponse({ results: enrichedResults });
   } catch (err) {
     console.error('[/api/users/search] Error:', err);
-    return NextResponse.json(
-      { error: 'Internal server error' },
-      { status: 500 }
-    );
+    return internalError();
   }
 }

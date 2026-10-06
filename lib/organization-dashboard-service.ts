@@ -107,18 +107,32 @@ export class OrganizationDashboardService {
     // Step 4: Calculate organization-wide metrics
     const summary = this.calculateMetrics(tasks || []);
 
-    // Step 5: Build per-team metrics
+    // Step 5: Batch-fetch all team member counts (eliminates N+1 query pattern)
+    // Get all team IDs and fetch member counts in a single aggregated query
+    const teamIds = (teams || []).map((t) => t.id);
+    const { data: teamMemberCounts, error: memberCountError } = await this.supabase
+      .from('team_members')
+      .select('team_id')
+      .in('team_id', teamIds);
+
+    if (memberCountError) {
+      console.error('[org-dashboard] Team members count query error:', memberCountError);
+      // Gracefully degrade: use 0 as member count
+    }
+
+    // Build a map of team_id -> member count
+    const memberCountByTeam = new Map<string, number>();
+    (teamMemberCounts || []).forEach((member) => {
+      const count = memberCountByTeam.get(member.team_id) ?? 0;
+      memberCountByTeam.set(member.team_id, count + 1);
+    });
+
+    // Step 6: Build per-team metrics
     const teamMetrics: TeamMetrics[] = [];
 
     for (const team of teams || []) {
       const teamTasks = (tasks || []).filter((t) => t.team_id === team.id);
       const metrics = this.calculateMetrics(teamTasks);
-
-      // Get member count
-      const { count: memberCount } = await this.supabase
-        .from('team_members')
-        .select('*', { count: 'exact', head: true })
-        .eq('team_id', team.id);
 
       teamMetrics.push({
         team_id: team.id,
@@ -130,7 +144,7 @@ export class OrganizationDashboardService {
         overdue: metrics.overdue,
         needs_assignment_review: metrics.needs_assignment_review,
         unassigned: metrics.unassigned,
-        member_count: memberCount ?? 0,
+        member_count: memberCountByTeam.get(team.id) ?? 0,
       });
     }
 

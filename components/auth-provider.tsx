@@ -61,17 +61,20 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       });
 
       if (response.ok) {
-        setOrganization(await response.json());
+        const responseData = await response.json();
+        // Handle both old and new response formats
+        const data = responseData.data || responseData;
+        setOrganization(data);
       } else {
         const errorData = await response.json().catch(() => ({}));
-        const errorMsg = errorData.error || errorData.reason || 'Failed to load organization';
+        const errorMsg = errorData.error?.message || errorData.error || errorData.reason || 'Failed to load organization';
         console.error(`[auth-provider] Failed to load organization (${response.status}): ${errorMsg}`);
-        loadedOrgForUser.current = null; // allow retry
+        loadedOrgForUser.current = null;
         setOrganization(null);
       }
     } catch (err) {
       console.error('[auth-provider] Failed to load organization context (network error):', err);
-      loadedOrgForUser.current = null; // allow retry
+      loadedOrgForUser.current = null;
       setOrganization(null);
     }
   }, []);

@@ -1,108 +1,74 @@
-import { NextRequest, NextResponse } from 'next/server';
+import { NextRequest } from 'next/server';
 import { createServerClient, getUserFromRequest } from '@/lib/supabase-server';
 import { getUserOrganizationContext } from '@/lib/organization-context';
 import { OrganizationDashboardService } from '@/lib/organization-dashboard-service';
+import { successResponse, unauthorized, validationError, internalError, insufficientPermissions } from '@/lib/api-response';
 
 export const dynamic = 'force-dynamic';
 
 /**
  * GET /api/dashboard/manager
- * POST /api/dashboard/manager
  *
  * Get manager/organization dashboard data.
- *
- * Authorization:
- * - User must be authenticated
- * - User must have role 'owner' or 'manager' in their organization
- *
- * POST Body (optional):
- * - team_id: If provided, returns drill-down for that team
- *
- * Returns:
- * - 200: Manager dashboard data (org-level or team drill-down)
- * - 401: Not authenticated
- * - 403: Not authorized (not manager/owner)
- * - 500: Server error
+ * User must be authenticated and have 'owner' or 'manager' role.
  */
 export async function GET(req: NextRequest) {
   try {
     const user = await getUserFromRequest(req);
     if (!user) {
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+      return unauthorized('You must be signed in');
     }
 
     const supabase = createServerClient();
 
-    // Get organization context (server-validated)
     const orgContext = await getUserOrganizationContext(supabase, user.userId);
     if (!orgContext) {
-      return NextResponse.json(
-        { error: 'User has no organization membership' },
-        { status: 403 },
-      );
+      return validationError('User has no organization membership');
     }
 
-    // Verify user is manager or owner
     if (orgContext.role !== 'owner' && orgContext.role !== 'manager') {
-      return NextResponse.json(
-        { error: 'Not authorized (must be manager or owner)' },
-        { status: 403 },
-      );
+      return insufficientPermissions('organization dashboard');
     }
 
-    // Get organization dashboard
     const service = new OrganizationDashboardService(supabase);
 
-    let dashboard;
     try {
-      dashboard = await service.getDashboard(user.userId, orgContext.organizationId);
+      const dashboard = await service.getDashboard(user.userId, orgContext.organizationId);
+      console.log(`[manager-dashboard] Fetched dashboard for user ${user.userId}`);
+      return successResponse(dashboard);
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Failed to fetch dashboard';
       console.error('[manager-dashboard] Error:', message);
       throw err;
     }
-
-    console.log(
-      `[manager-dashboard] Fetched dashboard for user ${user.userId}, org ${orgContext.organizationId}`,
-    );
-
-    return NextResponse.json(dashboard);
   } catch (err) {
     console.error('[manager-dashboard] Error:', err);
-    const message = err instanceof Error ? err.message : 'Unknown error';
-    return NextResponse.json({ error: message }, { status: 500 });
+    return internalError('An unexpected error occurred');
   }
 }
 
 /**
  * POST /api/dashboard/manager
  *
- * Get manager dashboard with optional drill-down.
+ * Get manager dashboard with optional team drill-down.
+ * Request body: { team_id?: string }
  */
 export async function POST(req: NextRequest) {
   try {
     const user = await getUserFromRequest(req);
     if (!user) {
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+      return unauthorized('You must be signed in');
     }
 
     const supabase = createServerClient();
 
-    // Get organization context (server-validated)
     const orgContext = await getUserOrganizationContext(supabase, user.userId);
     if (!orgContext) {
-      return NextResponse.json(
-        { error: 'User has no organization membership' },
-        { status: 403 },
-      );
+      return validationError('User has no organization membership');
     }
 
-    // Verify user is manager or owner
     if (orgContext.role !== 'owner' && orgContext.role !== 'manager') {
-      return NextResponse.json(
-        { error: 'Not authorized (must be manager or owner)' },
-        { status: 403 },
-      );
+      return insufficientPermissions('organization dashboard');
     }
 
     const body = await req.json().catch(() => ({}));
@@ -110,48 +76,28 @@ export async function POST(req: NextRequest) {
 
     const service = new OrganizationDashboardService(supabase);
 
-    let data;
-
-    if (team_id) {
-      // Return team drill-down
-      try {
-        data = await service.getTeamDrilldown(user.userId, orgContext.organizationId, team_id);
-      } catch (err) {
-        const message = err instanceof Error ? err.message : 'Failed to fetch team data';
-        console.error('[manager-dashboard] Team drill-down error:', message);
-
-        if (message.includes('Not authorized') || message.includes('not found')) {
-          return NextResponse.json(
-            { error: 'Team not found or not authorized' },
-            { status: 403 },
-          );
-        }
-
-        throw err;
+    try {
+      if (team_id) {
+        const data = await service.getTeamDrilldown(user.userId, orgContext.organizationId, team_id);
+        console.log(`[manager-dashboard] Fetched team drill-down for team ${team_id}`);
+        return successResponse(data);
+      } else {
+        const data = await service.getDashboard(user.userId, orgContext.organizationId);
+        console.log(`[manager-dashboard] Fetched dashboard for user ${user.userId}`);
+        return successResponse(data);
       }
-
-      console.log(
-        `[manager-dashboard] Fetched team drill-down for user ${user.userId}, team ${team_id}`,
-      );
-    } else {
-      // Return organization-level dashboard
-      try {
-        data = await service.getDashboard(user.userId, orgContext.organizationId);
-      } catch (err) {
-        const message = err instanceof Error ? err.message : 'Failed to fetch dashboard';
-        console.error('[manager-dashboard] Error:', message);
-        throw err;
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Failed to fetch dashboard';
+      console.error('[manager-dashboard] Error:', message);
+      
+      if (message.includes('Not authorized') || message.includes('not found')) {
+        return validationError('Team not found or not authorized');
       }
-
-      console.log(
-        `[manager-dashboard] Fetched dashboard for user ${user.userId}, org ${orgContext.organizationId}`,
-      );
+      
+      throw err;
     }
-
-    return NextResponse.json(data);
   } catch (err) {
     console.error('[manager-dashboard] Error:', err);
-    const message = err instanceof Error ? err.message : 'Unknown error';
-    return NextResponse.json({ error: message }, { status: 500 });
+    return internalError('An unexpected error occurred');
   }
 }

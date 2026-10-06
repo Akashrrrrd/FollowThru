@@ -13,6 +13,8 @@ import {
   getUserTeams,
 } from '@/lib/team-authorization';
 
+import { unauthorized, internalError, validationError, successResponse } from '@/lib/api-response';
+
 import {
   updateOverdueTasks,
 } from '@/lib/overdue';
@@ -319,14 +321,7 @@ export async function GET(req: NextRequest) {
     const user = await getUserFromRequest(req);
 
     if (!user) {
-      return NextResponse.json(
-        {
-          error: 'You must be signed in.',
-        },
-        {
-          status: 401,
-        },
-      );
+      return unauthorized('You must be signed in');
     }
 
     const supabase = createServerClient();
@@ -344,15 +339,7 @@ export async function GET(req: NextRequest) {
       );
 
     if (!orgContext) {
-      return NextResponse.json(
-        {
-          error:
-            'User has no organization membership',
-        },
-        {
-          status: 403,
-        },
-      );
+      return validationError('User has no organization membership');
     }
 
     /*
@@ -405,15 +392,7 @@ export async function GET(req: NextRequest) {
         teamsError,
       );
 
-      return NextResponse.json(
-        {
-          error:
-            'Failed to fetch organization teams.',
-        },
-        {
-          status: 500,
-        },
-      );
+      return internalError('Failed to fetch organization teams');
     }
 
     /*
@@ -486,15 +465,7 @@ export async function GET(req: NextRequest) {
         tasksError,
       );
 
-      return NextResponse.json(
-        {
-          error:
-            'Failed to fetch accountability data.',
-        },
-        {
-          status: 500,
-        },
-      );
+      return internalError('Failed to fetch accountability data');
     }
 
     const accountabilityTasks =
@@ -683,12 +654,11 @@ export async function GET(req: NextRequest) {
      * -------------------------------------------------------
      */
 
-    return NextResponse.json({
+    return successResponse({
       organization: {
         id: orgContext.organizationId,
         role: orgContext.role,
       },
-
       summary: {
         total,
         completed,
@@ -698,12 +668,10 @@ export async function GET(req: NextRequest) {
         open,
         completion_rate: completionRate,
       },
-
       accountability_status: {
         organization: orgStatus,
         my_status: myStatus,
       },
-
       mine: {
         total: myTotal,
         completed: myCompleted,
@@ -712,12 +680,8 @@ export async function GET(req: NextRequest) {
         overdue: myOverdue,
         completion_rate: myCompletionRate,
       },
-
       owners: ownerMetrics,
-
       teams: teamMetrics,
-
-      generated_at: new Date().toISOString(),
     });
   } catch (err) {
     console.error(
@@ -725,14 +689,6 @@ export async function GET(req: NextRequest) {
       err,
     );
 
-    return NextResponse.json(
-      {
-        error:
-          'An unexpected error occurred.',
-      },
-      {
-        status: 500,
-      },
-    );
+    return internalError('An unexpected error occurred');
   }
 }

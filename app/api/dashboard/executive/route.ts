@@ -1,33 +1,30 @@
-import { NextRequest, NextResponse } from 'next/server';
-import { createServerClient } from '@/lib/supabase-server';
+import { NextRequest } from 'next/server';
+import { createServerClient, getUserFromRequest } from '@/lib/supabase-server';
 import { ExecutiveDashboardService } from '@/lib/executive-dashboard-service';
-import { getUserFromRequest } from '@/lib/supabase-server';
+import { successResponse, unauthorized, validationError, internalError } from '@/lib/api-response';
 
 export async function POST(request: NextRequest) {
   try {
-    const userResult = await getUserFromRequest(request);
-    if (!userResult) {
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+    const user = await getUserFromRequest(request);
+    if (!user) {
+      return unauthorized('You must be signed in');
     }
 
-    const body = await request.json();
-    const { period = 'month' } = body;
+    const body = await request.json().catch(() => ({}));
+    const { period = 'month' } = body as { period?: string };
 
     if (!['week', 'month', 'quarter', 'year'].includes(period)) {
-      return NextResponse.json({ error: 'Invalid period' }, { status: 400 });
+      return validationError('Invalid period. Must be: week, month, quarter, or year', { field: 'period' });
     }
 
     const supabase = createServerClient();
     const service = new ExecutiveDashboardService(supabase);
 
-    const metrics = await service.getMetrics(userResult.userId, period as any);
+    const metrics = await service.getMetrics(user.userId, period as any);
 
-    return NextResponse.json(metrics);
+    return successResponse(metrics);
   } catch (error) {
     console.error('Executive dashboard error:', error);
-    return NextResponse.json(
-      { error: 'Failed to fetch dashboard metrics' },
-      { status: 500 },
-    );
+    return internalError('Failed to fetch dashboard metrics');
   }
 }

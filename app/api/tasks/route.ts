@@ -1,8 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server';
-
 import { createServerClient, getUserFromRequest } from '@/lib/supabase-server';
 import { getUserOrganizations } from '@/lib/organization-context';
 import { updateOverdueTasks } from '@/lib/overdue';
+import { successResponse, createdResponse, unauthorized, internalError, validationError, notFound } from '@/lib/api-response';
 
 export const dynamic = 'force-dynamic';
 
@@ -16,19 +16,19 @@ export async function GET(req: NextRequest) {
   try {
     const user = await getUserFromRequest(req);
     if (!user) {
-      return NextResponse.json({ error: 'You must be signed in.' }, { status: 401 });
+      return unauthorized('You must be signed in');
     }
 
     const supabase = createServerClient();
 
-    // All of the user's organizations (users can belong to more than one)
+    // All organizations user belongs to
     const orgs = await getUserOrganizations(supabase, user.userId);
     if (orgs.length === 0) {
-      return NextResponse.json({ error: 'User has no organization membership' }, { status: 403 });
+      return validationError('User has no organization membership');
     }
     const orgIds = orgs.map((o) => o.organizationId);
 
-    // The user's teams: a single query (no per-team lookups)
+    // User's teams
     const { data: memberships, error: membershipError } = await supabase
       .from('team_members')
       .select('team_id')
@@ -41,13 +41,17 @@ export async function GET(req: NextRequest) {
 
     await updateOverdueTasks(user.userId);
 
+    // Parse query parameters
     const { searchParams } = new URL(req.url);
     const status = searchParams.get('status');
     const owner = searchParams.get('owner');
     const meetingId = searchParams.get('meeting_id');
     const myCommitments = searchParams.get('my_commitments') === 'true';
 
-    const visibility = [`user_id.eq.${user.userId}`, `assigned_to_user_id.eq.${user.userId}`];
+    const visibility = [
+      `user_id.eq.${user.userId}`,
+      `assigned_to_user_id.eq.${user.userId}`,
+    ];
     if (teamIds.length > 0) {
       visibility.push(`team_id.in.(${teamIds.join(',')})`);
     }
@@ -55,7 +59,7 @@ export async function GET(req: NextRequest) {
     let query = supabase
       .from('tasks')
       .select('*')
-      .in('organization_id', orgIds) // never leaves the user's own organizations
+      .in('organization_id', orgIds)
       .or(visibility.join(','))
       .order('due_date', { ascending: true, nullsFirst: false });
 
@@ -68,27 +72,26 @@ export async function GET(req: NextRequest) {
 
     if (error) {
       console.error('Tasks GET error:', error);
-      return NextResponse.json({ error: 'Failed to fetch tasks.' }, { status: 500 });
+      return internalError('Failed to fetch tasks');
     }
 
-    return NextResponse.json({ tasks: tasks ?? [] });
+    return successResponse(tasks ?? []);
   } catch (err) {
     console.error('Tasks GET error:', err);
-    return NextResponse.json({ error: 'An unexpected error occurred.' }, { status: 500 });
+    return internalError('An unexpected error occurred');
   }
 }
 
 /**
  * POST /api/tasks
  *
- * Manually add a task to one of the user's meetings. The organization (and team) come from
- * the MEETING, so this works for users who belong to several organizations.
+ * Manually add a task to one of the user's meetings.
  */
 export async function POST(req: NextRequest) {
   try {
     const user = await getUserFromRequest(req);
     if (!user) {
-      return NextResponse.json({ error: 'You must be signed in.' }, { status: 401 });
+      return unauthorized('You must be signed in');
     }
 
     const body = await req.json().catch(() => null);
@@ -99,31 +102,29 @@ export async function POST(req: NextRequest) {
       due_date?: string | null;
     };
 
-    if (
-      typeof meeting_id !== 'string' ||
-      typeof description !== 'string' ||
-      typeof owner !== 'string' ||
-      !description.trim() ||
-      !owner.trim()
-    ) {
-      return NextResponse.json(
-        { error: 'Meeting ID, description, and owner are required.' },
-        { status: 400 },
-      );
+    // Validation
+    if (!meeting_id || typeof meeting_id !== 'string') {
+      return validationError('Meeting ID is required', { field: 'meeting_id' });
+    }
+    if (!description || typeof description !== 'string' || !description.trim()) {
+      return validationError('Description is required', { field: 'description' });
+    }
+    if (!owner || typeof owner !== 'string' || !owner.trim()) {
+      return validationError('Owner is required', { field: 'owner' });
     }
     if (description.trim().length > 1000) {
-      return NextResponse.json({ error: 'Description must be at most 1000 characters.' }, { status: 400 });
+      return validationError('Description must be at most 1000 characters', { field: 'description' });
     }
     if (owner.trim().length > 200) {
-      return NextResponse.json({ error: 'Owner must be at most 200 characters.' }, { status: 400 });
+      return validationError('Owner must be at most 200 characters', { field: 'owner' });
     }
     if (due_date && isNaN(new Date(due_date).getTime())) {
-      return NextResponse.json({ error: 'Due date is not a valid date.' }, { status: 400 });
+      return validationError('Due date is not a valid date', { field: 'due_date' });
     }
 
     const supabase = createServerClient();
 
-    // The meeting must belong to this user
+    // Verify meeting belongs to user
     const { data: meeting, error: meetingError } = await supabase
       .from('meetings')
       .select('*')
@@ -131,11 +132,15 @@ export async function POST(req: NextRequest) {
       .eq('user_id', user.userId)
       .maybeSingle();
 
-    if (meetingError || !meeting || !meeting.organization_id) {
-      return NextResponse.json({ error: 'Meeting not found.' }, { status: 404 });
+    if (meetingError || !meeting) {
+      return notFound('Meeting not found');
     }
 
-    // ...and the user must (still) belong to the meeting's organization
+    if (!meeting.organization_id) {
+      return internalError('Meeting has no organization');
+    }
+
+    // Verify user belongs to meeting's organization
     const { data: orgMember, error: orgError } = await supabase
       .from('organization_members')
       .select('id')
@@ -144,16 +149,17 @@ export async function POST(req: NextRequest) {
       .maybeSingle();
 
     if (orgError || !orgMember) {
-      return NextResponse.json({ error: 'Meeting not found.' }, { status: 404 });
+      return notFound('Meeting not found');
     }
 
+    // Create task
     const { data: task, error } = await supabase
       .from('tasks')
       .insert({
         meeting_id,
         user_id: user.userId,
         organization_id: meeting.organization_id,
-        team_id: meeting.team_id ?? null, // inherit the meeting's team so team views can see it
+        team_id: meeting.team_id ?? null,
         description: description.trim(),
         owner: owner.trim(),
         due_date: due_date || null,
@@ -164,12 +170,12 @@ export async function POST(req: NextRequest) {
 
     if (error || !task) {
       console.error('Task POST error:', error);
-      return NextResponse.json({ error: 'Failed to create task.' }, { status: 500 });
+      return internalError('Failed to create task');
     }
 
-    return NextResponse.json({ task });
+    return createdResponse(task, 'Task created successfully');
   } catch (err) {
     console.error('Task POST error:', err);
-    return NextResponse.json({ error: 'An unexpected error occurred.' }, { status: 500 });
+    return internalError('An unexpected error occurred');
   }
 }

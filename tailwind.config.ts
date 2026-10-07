@@ -3,6 +3,12 @@ import type { Config } from 'tailwindcss';
 // `<alpha-value>` lets Tailwind apply opacity modifiers (bg-muted/60, text-gold/80, ...)
 const c = (name: string) => `hsl(var(--${name}) / <alpha-value>)`;
 
+// Semantic status: strong color + soft tint, e.g. text-status-overdue, bg-status-overdue-soft
+const status = (name: string) => ({
+  DEFAULT: c(`status-${name}`),
+  soft: c(`status-${name}-soft`),
+});
+
 const config: Config = {
   darkMode: ['class'],
   content: [
@@ -14,7 +20,7 @@ const config: Config = {
     container: {
       center: true,
       padding: { DEFAULT: '1rem', sm: '1.5rem', lg: '2rem' },
-      screens: { '2xl': '72rem' },
+      screens: { '2xl': '80rem' }, // 1280px
     },
     extend: {
       fontFamily: {
@@ -22,6 +28,10 @@ const config: Config = {
         serif: ['var(--font-serif)'],
         display: ['var(--font-display)'],
         mono: ['var(--font-mono)'],
+      },
+      maxWidth: {
+        page: '80rem',
+        prose: '68ch',
       },
       backgroundImage: {
         'gradient-radial': 'radial-gradient(var(--tw-gradient-stops))',
@@ -44,6 +54,9 @@ const config: Config = {
         md: 'var(--shadow-md)',
         lg: 'var(--shadow-lg)',
         gold: 'var(--shadow-gold)',
+      },
+      transitionTimingFunction: {
+        'out-expo': 'var(--ease-out)',
       },
       colors: {
         background: c('background'),
@@ -88,6 +101,15 @@ const config: Config = {
         },
         success: c('success'),
         warning: c('warning'),
+        status: {
+          overdue: status('overdue'),
+          soon: status('soon'),
+          progress: status('progress'),
+          done: status('done'),
+          blocked: status('blocked'),
+          info: status('info'),
+          neutral: status('neutral'),
+        },
         border: c('border'),
         input: c('input'),
         ring: c('ring'),
@@ -109,9 +131,18 @@ const config: Config = {
           to: { height: '0' },
         },
       },
+      // Keyframes for everything below live in globals.css so component
+      // classes (.toast, .btn, .field-message) can use them without a utility.
       animation: {
         'accordion-down': 'accordion-down 0.2s ease-out',
         'accordion-up': 'accordion-up 0.2s ease-out',
+        shimmer: 'shimmer 1.6s ease-in-out infinite',
+        'fade-in': 'fade-in 0.3s ease-out both',
+        'fade-up': 'fade-up 0.3s var(--ease-out) both',
+        'slide-in-right': 'slide-in-right 0.4s var(--ease-out) both',
+        'scale-up': 'scale-up 0.3s var(--ease-out) both',
+        'bounce-subtle': 'bounce-subtle 1.5s ease-in-out infinite',
+        shake: 'shake 0.4s ease-in-out',
       },
     },
   },

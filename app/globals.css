@@ -8,7 +8,8 @@
    DESIGN TOKENS
    Identity: "Royal Ledger" — ink navy, antique gold foil, cool porcelain paper.
    One signature move: gold foil hairlines and engraved surfaces.
-   Everything else stays quiet and disciplined.
+   Status colors carry meaning (overdue, due soon, in progress, done, blocked)
+   and are the ONLY saturated colors in the product UI.
    ========================================================================== */
 @layer base {
   :root {
@@ -46,6 +47,15 @@
     --success: 152 55% 32%;
     --warning: 34 90% 44%;
 
+    /* Semantic status system. Each has a strong color and a soft tint. */
+    --status-overdue: 0 72% 46%;       --status-overdue-soft: 0 86% 97%;
+    --status-soon: 28 90% 42%;         --status-soon-soft: 38 95% 94%;
+    --status-progress: 213 82% 44%;    --status-progress-soft: 213 90% 96%;
+    --status-done: 152 58% 30%;        --status-done-soft: 150 50% 94%;
+    --status-blocked: 262 52% 48%;     --status-blocked-soft: 262 60% 96%;
+    --status-info: 190 80% 32%;        --status-info-soft: 190 70% 94%;
+    --status-neutral: 215 16% 42%;     --status-neutral-soft: 220 16% 95%;
+
     /* Chart series: navy, gold, teal, slate, burgundy */
     --chart-1: 224 66% 30%;
     --chart-2: 39 60% 46%;
@@ -74,6 +84,9 @@
 
     /* Motion */
     --ease-out: cubic-bezier(0.22, 1, 0.36, 1);
+    --dur-fast: 150ms;
+    --dur-base: 200ms;
+    --dur-slow: 300ms;
   }
 
   .dark {
@@ -104,6 +117,14 @@
     --destructive: 0 70% 60%;
     --success: 152 50% 48%;
     --warning: 36 90% 58%;
+
+    --status-overdue: 0 78% 66%;       --status-overdue-soft: 0 45% 15%;
+    --status-soon: 36 92% 60%;         --status-soon-soft: 34 55% 14%;
+    --status-progress: 213 88% 70%;    --status-progress-soft: 213 50% 15%;
+    --status-done: 152 52% 52%;        --status-done-soft: 152 40% 13%;
+    --status-blocked: 262 80% 78%;     --status-blocked-soft: 262 40% 17%;
+    --status-info: 190 70% 55%;        --status-info-soft: 190 45% 13%;
+    --status-neutral: 215 18% 70%;     --status-neutral-soft: 220 20% 16%;
 
     --chart-1: 219 78% 68%;
     --chart-2: 42 68% 60%;
@@ -157,22 +178,22 @@
 
   h1 {
     @apply font-bold;
-    font-size: clamp(2.5rem, 6vw, 4rem);
-    line-height: 1.05;
+    font-size: clamp(2.25rem, 5vw, 3.5rem);
+    line-height: 1.08;
     letter-spacing: -0.028em;
   }
 
   h2 {
     @apply font-semibold;
-    font-size: clamp(1.75rem, 3.8vw, 2.5rem);
-    line-height: 1.15;
+    font-size: clamp(1.5rem, 3.2vw, 2.125rem);
+    line-height: 1.18;
     letter-spacing: -0.02em;
   }
 
   h3 {
     @apply font-semibold;
-    font-size: clamp(1.25rem, 2.6vw, 1.625rem);
-    line-height: 1.25;
+    font-size: clamp(1.125rem, 2.2vw, 1.375rem);
+    line-height: 1.28;
     letter-spacing: -0.012em;
   }
 
@@ -215,16 +236,17 @@
 
   button {
     transition: background-color 0.2s ease, color 0.2s ease, border-color 0.2s ease,
-                box-shadow 0.25s var(--ease-out), transform 0.15s ease;
+                box-shadow 0.25s var(--ease-out), transform 0.2s var(--ease-out);
   }
 
-  button:active:not(:disabled) {
+  /* .btn handles its own press state (scale), so skip the generic nudge */
+  button:not(.btn):active:not(:disabled) {
     transform: translateY(1px);
   }
 
   input, textarea, select {
     @apply bg-background border-input;
-    transition: border-color 0.2s ease, box-shadow 0.2s ease;
+    transition: border-color 0.2s ease, box-shadow 0.2s ease, background-color 0.2s ease;
   }
 
   input::placeholder,
@@ -233,7 +255,7 @@
     opacity: 0.75;
   }
 
-  /* Double focus ring: readable on any surface */
+  /* Focus ring: readable on any surface */
   :focus-visible {
     outline: 2px solid hsl(var(--ring));
     outline-offset: 2px;
@@ -268,14 +290,18 @@
   /* ---------- Page layout ---------- */
   .container-classic {
     width: 100%;
-    max-width: 72rem;
+    max-width: 80rem;                       /* 1280px */
     margin-inline: auto;
-    padding-inline: clamp(1rem, 4vw, 2rem);
+    padding-inline: clamp(1rem, 4vw, 2rem); /* 16px mobile, 32px desktop */
   }
 
   .section-classic {
     padding-block: clamp(3.5rem, 9vw, 7rem);
   }
+
+  /* Vertical rhythm for app pages: 48px between major sections, 16px between cards */
+  .page-stack     { display: flex; flex-direction: column; gap: 3rem; }
+  .card-grid      { display: grid; gap: 1rem; }
 
   /* Subtle paper grain over the whole page: add class to <body> or a wrapper */
   .paper {
@@ -335,18 +361,42 @@
     -webkit-text-fill-color: transparent;
   }
 
+  /* ---------- Type helpers (app UI) ---------- */
+  .text-meta {
+    @apply text-xs font-medium text-muted-foreground;
+    letter-spacing: 0.01em;
+  }
+
+  .text-caption {
+    @apply text-xs font-medium text-muted-foreground;
+    letter-spacing: 0.02em;
+  }
+
+  .text-section {
+    @apply text-sm font-semibold text-foreground;
+    font-family: var(--font-sans);
+    letter-spacing: 0.01em;
+  }
+
   /* ---------- Cards ---------- */
   .card-classic {
     position: relative;
     @apply rounded-xl border bg-card text-card-foreground;
     box-shadow: var(--shadow-md);
-    transition: box-shadow 0.35s var(--ease-out), border-color 0.35s ease, transform 0.35s var(--ease-out);
+    transition: box-shadow 0.35s var(--ease-out), border-color 0.35s ease, transform 0.35s var(--ease-out), opacity 0.3s ease;
   }
 
   .card-classic:hover {
     box-shadow: var(--shadow-lg);
     border-color: hsl(var(--gold) / 0.5);
     transform: translateY(-2px);
+  }
+
+  /* Opt out of lift for non-clickable cards */
+  .card-static:hover {
+    box-shadow: var(--shadow-md);
+    border-color: hsl(var(--border));
+    transform: none;
   }
 
   /* Engraved surface: inset highlight + gold foil edge on top */
@@ -386,15 +436,115 @@
     height: 100%;
   }
 
+  /* ==========================================================================
+     STATUS SYSTEM
+     Set data-status on any element to retheme its descendants:
+       overdue | soon | progress | done | blocked | info | neutral
+     Then use .status-card, .status-badge, .status-band, .status-dot.
+     ========================================================================== */
+  [data-status="overdue"],  [data-tone="overdue"]  { --st: var(--status-overdue);  --st-soft: var(--status-overdue-soft); }
+  [data-status="soon"],     [data-tone="soon"]     { --st: var(--status-soon);     --st-soft: var(--status-soon-soft); }
+  [data-status="progress"], [data-tone="progress"] { --st: var(--status-progress); --st-soft: var(--status-progress-soft); }
+  [data-status="done"],     [data-tone="done"]     { --st: var(--status-done);     --st-soft: var(--status-done-soft); }
+  [data-status="blocked"],  [data-tone="blocked"]  { --st: var(--status-blocked);  --st-soft: var(--status-blocked-soft); }
+  [data-status="info"],     [data-tone="info"]     { --st: var(--status-info);     --st-soft: var(--status-info-soft); }
+  [data-status="neutral"],  [data-tone="neutral"]  { --st: var(--status-neutral);  --st-soft: var(--status-neutral-soft); }
+
+  /* Commitment card: colored left rail + very light tint */
+  .status-card {
+    @apply card-classic;
+    border-left: 4px solid hsl(var(--st, var(--status-neutral)));
+    background-image: linear-gradient(90deg, hsl(var(--st-soft, var(--status-neutral-soft)) / 0.7), transparent 38%);
+  }
+
+  /* Completed items recede until hovered */
+  .status-card[data-status="done"] {
+    opacity: 0.72;
+  }
+  .status-card[data-status="done"]:hover {
+    opacity: 1;
+  }
+
+  /* Overdue items get a quiet pulse on the rail only */
+  .status-card[data-status="overdue"][data-urgent="true"] {
+    animation: rail-pulse 2.4s ease-in-out infinite;
+  }
+
+  .status-badge {
+    @apply inline-flex items-center gap-1 rounded-full border px-2.5 py-0.5 text-xs font-semibold;
+    color: hsl(var(--st, var(--status-neutral)));
+    background: hsl(var(--st-soft, var(--status-neutral-soft)));
+    border-color: hsl(var(--st, var(--status-neutral)) / 0.3);
+  }
+
+  .status-dot {
+    display: inline-block;
+    width: 0.5rem;
+    height: 0.5rem;
+    border-radius: 999px;
+    background: hsl(var(--st, var(--status-neutral)));
+  }
+
+  /* Group header for dashboard sections */
+  .status-band {
+    @apply flex items-center justify-between gap-3 rounded-lg border px-4 py-2.5;
+    background: hsl(var(--st-soft, var(--status-neutral-soft)));
+    border-color: hsl(var(--st, var(--status-neutral)) / 0.25);
+    color: hsl(var(--st, var(--status-neutral)));
+  }
+
+  .status-band > h2,
+  .status-band > h3 {
+    font-family: var(--font-sans);
+    font-size: 0.9375rem;
+    font-weight: 700;
+    letter-spacing: 0.005em;
+    color: inherit;
+  }
+
+  /* Confidence chips (High / Medium / Low) */
+  .confidence {
+    @apply inline-flex items-center gap-1 rounded-md px-2 py-0.5 text-xs font-medium;
+    color: hsl(var(--st, var(--status-neutral)));
+    background: hsl(var(--st-soft, var(--status-neutral-soft)));
+  }
+
   /* ---------- Buttons ---------- */
   .btn {
     @apply inline-flex items-center justify-center gap-2 rounded-md px-5 py-2.5
            text-sm font-semibold tracking-tight cursor-pointer select-none
-           disabled:pointer-events-none disabled:opacity-50;
+           disabled:cursor-not-allowed disabled:opacity-50;
+    position: relative;
+    transition: transform var(--dur-base) var(--ease-out),
+                box-shadow 0.25s var(--ease-out),
+                filter var(--dur-base) ease,
+                background-color var(--dur-base) ease,
+                border-color var(--dur-base) ease,
+                color var(--dur-base) ease;
+  }
+
+  .btn:hover:not(:disabled):not([aria-busy="true"]) {
+    transform: scale(1.02);
+  }
+
+  .btn:active:not(:disabled) {
+    transform: scale(0.98);
+    transition-duration: 100ms;
+  }
+
+  .btn:disabled,
+  .btn[aria-disabled="true"] {
+    transform: none;
+    filter: saturate(0.6);
+    box-shadow: none;
   }
 
   .btn-lg {
     @apply px-7 py-3.5 text-base;
+  }
+
+  .btn-sm {
+    @apply px-3 py-1.5 text-xs;
   }
 
   .btn-primary {
@@ -403,7 +553,7 @@
     box-shadow: var(--shadow-sm), inset 0 1px 0 hsl(0 0% 100% / 0.16);
   }
 
-  .btn-primary:hover {
+  .btn-primary:hover:not(:disabled) {
     box-shadow: var(--shadow-md), inset 0 1px 0 hsl(0 0% 100% / 0.2);
     filter: brightness(1.08);
   }
@@ -415,7 +565,7 @@
     box-shadow: var(--shadow-sm), inset 0 1px 0 hsl(0 0% 100% / 0.4), inset 0 -1px 0 hsl(var(--gold-dark) / 0.4);
   }
 
-  .btn-gold:hover {
+  .btn-gold:hover:not(:disabled) {
     box-shadow: var(--shadow-gold), inset 0 1px 0 hsl(0 0% 100% / 0.45);
     filter: brightness(1.04);
   }
@@ -425,7 +575,7 @@
     box-shadow: var(--shadow-xs);
   }
 
-  .btn-outline:hover {
+  .btn-outline:hover:not(:disabled) {
     @apply bg-accent;
     border-color: hsl(var(--gold) / 0.65);
   }
@@ -434,8 +584,69 @@
     @apply btn text-foreground;
   }
 
-  .btn-ghost:hover {
+  .btn-ghost:hover:not(:disabled) {
     @apply bg-accent;
+  }
+
+  /* Confirm actions: Mark complete, Accept & join */
+  .btn-success {
+    @apply btn;
+    color: #fff;
+    background: linear-gradient(180deg, hsl(var(--status-done) / 0.92), hsl(var(--status-done)));
+    box-shadow: var(--shadow-sm), inset 0 1px 0 hsl(0 0% 100% / 0.2);
+  }
+
+  .dark .btn-success {
+    color: hsl(152 60% 8%);
+  }
+
+  .btn-success:hover:not(:disabled) {
+    box-shadow: 0 0 0 1px hsl(var(--status-done) / 0.4), 0 8px 22px -6px hsl(var(--status-done) / 0.5);
+    filter: brightness(1.06);
+  }
+
+  /* Destructive actions: Delete, Disconnect */
+  .btn-danger {
+    @apply btn text-destructive-foreground;
+    background: linear-gradient(180deg, hsl(var(--destructive) / 0.92), hsl(var(--destructive)));
+    box-shadow: var(--shadow-sm), inset 0 1px 0 hsl(0 0% 100% / 0.16);
+  }
+
+  .dark .btn-danger {
+    color: hsl(0 60% 8%);
+  }
+
+  .btn-danger:hover:not(:disabled) {
+    filter: brightness(0.9);
+    box-shadow: var(--shadow-md);
+  }
+
+  /* Loading: set aria-busy="true" on the button. Swap the label ("Signing in...") in markup. */
+  .btn[aria-busy="true"] {
+    cursor: progress;
+    pointer-events: none;
+  }
+
+  .btn[aria-busy="true"]::before {
+    content: "";
+    width: 1em;
+    height: 1em;
+    flex: none;
+    border-radius: 999px;
+    border: 2px solid currentColor;
+    border-right-color: transparent;
+    animation: ft-spin 0.7s linear infinite;
+  }
+
+  /* Standalone spinner */
+  .spinner {
+    display: inline-block;
+    width: 1.25rem;
+    height: 1.25rem;
+    border-radius: 999px;
+    border: 2px solid hsl(var(--border));
+    border-top-color: hsl(var(--primary));
+    animation: ft-spin 0.8s linear infinite;
   }
 
   /* ---------- Navigation ---------- */
@@ -481,18 +692,26 @@
 
   /* ---------- Forms ---------- */
   .field {
-    @apply w-full rounded-md border border-input bg-card px-3.5 py-2.5 text-sm;
+    @apply w-full rounded-md border border-input bg-card px-3.5 py-2.5 text-sm text-foreground;
     box-shadow: var(--shadow-xs), inset 0 1px 2px hsl(224 50% 10% / 0.04);
   }
 
-  .field:hover {
-    border-color: hsl(var(--muted-foreground) / 0.5);
+  .field:hover:not(:focus):not(:disabled) {
+    border-color: hsl(var(--muted-foreground) / 0.55);
+    background-color: hsl(var(--muted) / 0.5);
   }
 
   .field:focus {
     outline: none;
     border-color: hsl(var(--ring));
+    background-color: hsl(var(--card));
     box-shadow: 0 0 0 4px hsl(var(--ring) / 0.16), var(--shadow-xs);
+  }
+
+  .field:disabled,
+  .field[readonly] {
+    @apply bg-muted text-muted-foreground;
+    cursor: not-allowed;
   }
 
   .field[aria-invalid="true"] {
@@ -500,12 +719,178 @@
     box-shadow: 0 0 0 4px hsl(var(--destructive) / 0.12);
   }
 
+  .field[aria-invalid="true"].shake {
+    animation: shake 0.4s ease-in-out;
+  }
+
+  .field[data-valid="true"] {
+    border-color: hsl(var(--status-done));
+    box-shadow: 0 0 0 4px hsl(var(--status-done) / 0.1);
+  }
+
+  /* Wrapper for field + trailing icon (check, x, show/hide password) */
+  .field-wrap {
+    position: relative;
+  }
+
+  .field-wrap > .field {
+    padding-right: 2.5rem;
+  }
+
+  .field-icon {
+    position: absolute;
+    right: 0.75rem;
+    top: 50%;
+    transform: translateY(-50%);
+    display: inline-flex;
+    width: 1.25rem;
+    height: 1.25rem;
+    align-items: center;
+    justify-content: center;
+    color: hsl(var(--muted-foreground));
+  }
+
+  .field-icon[data-tone="done"]    { color: hsl(var(--status-done)); animation: pop 0.3s var(--ease-out); }
+  .field-icon[data-tone="overdue"] { color: hsl(var(--status-overdue)); }
+
+  button.field-icon {
+    pointer-events: auto;
+    border-radius: 0.375rem;
+  }
+  button.field-icon:hover { color: hsl(var(--foreground)); }
+
   .label-classic {
     @apply mb-1.5 block text-sm font-medium text-foreground;
   }
 
+  .required-mark::after {
+    content: " *";
+    color: hsl(var(--destructive));
+    font-weight: 700;
+  }
+
   .hint {
     @apply mt-1.5 text-xs text-muted-foreground;
+  }
+
+  .field-message {
+    @apply mt-1.5 flex items-center gap-1.5 text-xs font-medium;
+    color: hsl(var(--st, var(--status-neutral)));
+    animation: fade-up 0.2s var(--ease-out) both;
+  }
+
+  /* Password strength: <div class="strength" data-level="0..4"><span/><span/><span/><span/></div> */
+  .strength {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 4px;
+    margin-top: 0.5rem;
+  }
+
+  .strength > span {
+    height: 4px;
+    border-radius: 999px;
+    background: hsl(var(--border));
+    transition: background-color 0.3s ease;
+  }
+
+  .strength[data-level="1"] > span:nth-child(-n+1) { background: hsl(var(--status-overdue)); }
+  .strength[data-level="2"] > span:nth-child(-n+2) { background: hsl(var(--status-soon)); }
+  .strength[data-level="3"] > span:nth-child(-n+3) { background: hsl(var(--status-done)); }
+  .strength[data-level="4"] > span:nth-child(-n+4) { background: hsl(var(--status-done)); }
+
+  /* Drag-and-drop zone (New Meeting) */
+  .dropzone {
+    @apply flex flex-col items-center justify-center gap-2 rounded-xl border-2 border-dashed px-6 py-12 text-center;
+    border-color: hsl(var(--input));
+    background: hsl(var(--muted) / 0.4);
+    transition: border-color 0.2s ease, background-color 0.2s ease, transform 0.25s var(--ease-out);
+  }
+
+  .dropzone:hover {
+    border-color: hsl(var(--gold) / 0.7);
+  }
+
+  .dropzone[data-dragging="true"] {
+    border-color: hsl(var(--gold));
+    background: hsl(var(--gold) / 0.1);
+    transform: scale(1.01);
+  }
+
+  /* Progress bar */
+  .progress {
+    height: 6px;
+    overflow: hidden;
+    border-radius: 999px;
+    background: hsl(var(--muted));
+  }
+
+  .progress > span {
+    display: block;
+    height: 100%;
+    border-radius: inherit;
+    background: linear-gradient(90deg, hsl(var(--gold-dark)), hsl(var(--gold-light)));
+    transition: width 0.4s var(--ease-out);
+  }
+
+  /* Unknown duration: <div class="progress" data-indeterminate><span/></div> */
+  .progress[data-indeterminate] > span {
+    width: 40%;
+    animation: indeterminate 1.4s ease-in-out infinite;
+  }
+
+  /* ---------- Toasts ---------- */
+  .toast-viewport {
+    position: fixed;
+    right: 1rem;
+    bottom: 1rem;
+    z-index: 100;
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+    width: min(24rem, calc(100vw - 2rem));
+    pointer-events: none;
+  }
+
+  .toast {
+    @apply flex items-start gap-3 rounded-lg border p-3.5 pr-3 text-sm;
+    pointer-events: auto;
+    color: hsl(var(--foreground));
+    background: hsl(var(--st-soft, var(--card)));
+    border-color: hsl(var(--st, var(--border)) / 0.35);
+    box-shadow: var(--shadow-lg);
+    animation: toast-in 0.3s var(--ease-out) both;
+  }
+
+  .toast[data-tone="overdue"] {
+    animation: toast-in 0.3s var(--ease-out) both, shake 0.4s ease-in-out 0.3s;
+  }
+
+  .toast[data-state="closed"] {
+    animation: toast-out 0.2s ease-in forwards;
+  }
+
+  .toast-icon {
+    flex: none;
+    margin-top: 1px;
+    color: hsl(var(--st, var(--foreground)));
+  }
+
+  .toast-title {
+    @apply font-semibold leading-snug;
+  }
+
+  .toast-body {
+    @apply mt-0.5 text-xs text-muted-foreground leading-relaxed;
+  }
+
+  .toast-action {
+    @apply ml-auto flex-none rounded-md px-2 py-1 text-xs font-semibold;
+    color: hsl(var(--st, var(--primary)));
+  }
+
+  .toast-action:hover {
+    background: hsl(var(--st, var(--primary)) / 0.1);
   }
 
   /* ---------- Data ---------- */
@@ -547,6 +932,15 @@
     font-variant-numeric: tabular-nums lining-nums;
   }
 
+  /* Metric card with a status-colored value */
+  .stat-card {
+    @apply card-classic p-5;
+  }
+
+  .stat-card[data-status] .stat-value {
+    color: hsl(var(--st));
+  }
+
   /* ---------- Badges & alerts ---------- */
   .badge-classic {
     @apply inline-flex items-center gap-1 rounded-full border px-2.5 py-0.5 text-xs font-medium;
@@ -575,6 +969,35 @@
 
   .alert-classic[data-tone="danger"]::before  { background: hsl(var(--destructive)); }
   .alert-classic[data-tone="success"]::before { background: hsl(var(--success)); }
+
+  /* ---------- Empty & error states ---------- */
+  .empty-state {
+    @apply mx-auto flex max-w-md flex-col items-center gap-3 px-4 py-14 text-center;
+  }
+
+  .empty-state__art {
+    display: grid;
+    place-items: center;
+    width: 5rem;
+    height: 5rem;
+    border-radius: 999px;
+    color: hsl(var(--gold-dark));
+    background: hsl(var(--gold) / 0.12);
+    box-shadow: inset 0 0 0 1px hsl(var(--gold) / 0.35);
+  }
+
+  .dark .empty-state__art {
+    color: hsl(var(--gold-light));
+  }
+
+  .empty-state h2,
+  .empty-state h3 {
+    font-size: 1.375rem;
+  }
+
+  .empty-state p {
+    @apply text-sm text-muted-foreground;
+  }
 
   /* ---------- Ornaments ---------- */
   .divider-ornament {
@@ -638,13 +1061,73 @@
     color: hsl(var(--gold));
   }
 
-  /* Loading placeholder */
+  /* ---------- Loading placeholders ---------- */
   .skeleton {
     @apply rounded-md;
     background: linear-gradient(90deg,
       hsl(var(--muted)) 25%, hsl(var(--accent)) 50%, hsl(var(--muted)) 75%);
     background-size: 200% 100%;
     animation: shimmer 1.6s ease-in-out infinite;
+  }
+
+  .skeleton-text   { @apply skeleton; height: 0.875rem; }
+  .skeleton-title  { @apply skeleton; height: 1.375rem; width: 55%; }
+  .skeleton-circle { @apply skeleton; border-radius: 999px; }
+  .skeleton-card   { @apply card-classic p-4; }
+  .skeleton-card:hover { transform: none; box-shadow: var(--shadow-md); border-color: hsl(var(--border)); }
+
+  /* Overlay for in-place refreshes */
+  .loading-state {
+    position: relative;
+  }
+
+  .loading-state::after {
+    content: "";
+    position: absolute;
+    inset: 0;
+    background: hsl(var(--background) / 0.7);
+    border-radius: inherit;
+    z-index: 10;
+  }
+
+  /* ---------- Celebration & feedback ---------- */
+  /* Completion: add data-just-completed="true" to the card for ~1.2s */
+  [data-just-completed="true"] {
+    animation: complete-glow 1.1s var(--ease-out);
+  }
+
+  /* Animated checkmark: <svg class="check-draw"><path d="M5 13l4 4L19 7"/></svg> */
+  .check-draw path {
+    stroke-dasharray: 24;
+    stroke-dashoffset: 24;
+    animation: check-draw 0.4s var(--ease-out) 0.1s forwards;
+  }
+
+  /* A value that just changed (profile fields, status changes) */
+  .flash-change {
+    animation: flash-change 1.4s ease-out;
+  }
+
+  /* Confetti particle: rendered by a Confetti component, see --x, --r, --d, --c */
+  .confetti-piece {
+    position: fixed;
+    top: -12px;
+    left: var(--x, 50%);
+    width: 8px;
+    height: 14px;
+    border-radius: 2px;
+    background: var(--c, hsl(var(--gold)));
+    pointer-events: none;
+    z-index: 200;
+    animation: confetti-fall 1.1s cubic-bezier(0.3, 0.6, 0.5, 1) var(--d, 0s) forwards;
+  }
+
+  .page-enter {
+    animation: fade-up 0.3s var(--ease-out) both;
+  }
+
+  .page-enter-right {
+    animation: slide-in-right 0.4s var(--ease-out) both;
   }
 }
 
@@ -674,8 +1157,17 @@
   .foil-shine {
     animation: foil 8s linear infinite;
   }
+
+  /* Staggered list entrance: set style="--i: index" on each child */
+  .stagger > * {
+    animation: fade-up 0.35s var(--ease-out) both;
+    animation-delay: calc(var(--i, 0) * 45ms);
+  }
 }
 
+/* ==========================================================================
+   KEYFRAMES
+   ========================================================================== */
 @keyframes reveal {
   from { opacity: 0; transform: translateY(14px); }
   to   { opacity: 1; transform: none; }
@@ -691,6 +1183,87 @@
   to   { background-position: 200% center; }
 }
 
+@keyframes ft-spin {
+  to { transform: rotate(360deg); }
+}
+
+@keyframes indeterminate {
+  0%   { transform: translateX(-100%); }
+  100% { transform: translateX(250%); }
+}
+
+@keyframes fade-in {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
+
+@keyframes fade-up {
+  from { opacity: 0; transform: translateY(6px); }
+  to   { opacity: 1; transform: none; }
+}
+
+@keyframes slide-in-right {
+  from { opacity: 0; transform: translateX(24px); }
+  to   { opacity: 1; transform: none; }
+}
+
+@keyframes scale-up {
+  from { opacity: 0; transform: scale(0.96); }
+  to   { opacity: 1; transform: none; }
+}
+
+@keyframes bounce-subtle {
+  0%, 100% { transform: translateY(0); }
+  50%      { transform: translateY(-2px); }
+}
+
+@keyframes pop {
+  0%   { transform: translateY(-50%) scale(0.4); opacity: 0; }
+  70%  { transform: translateY(-50%) scale(1.15); opacity: 1; }
+  100% { transform: translateY(-50%) scale(1); }
+}
+
+@keyframes shake {
+  0%, 100% { transform: translateX(0); }
+  25%      { transform: translateX(-4px); }
+  50%      { transform: translateX(4px); }
+  75%      { transform: translateX(-3px); }
+}
+
+@keyframes toast-in {
+  from { opacity: 0; transform: translateY(12px) scale(0.98); }
+  to   { opacity: 1; transform: none; }
+}
+
+@keyframes toast-out {
+  to { opacity: 0; transform: translateY(6px) scale(0.98); }
+}
+
+@keyframes check-draw {
+  to { stroke-dashoffset: 0; }
+}
+
+@keyframes complete-glow {
+  0%   { box-shadow: var(--shadow-md), 0 0 0 0 hsl(var(--status-done) / 0.55); }
+  60%  { box-shadow: var(--shadow-md), 0 0 0 10px hsl(var(--status-done) / 0); }
+  100% { box-shadow: var(--shadow-md), 0 0 0 0 hsl(var(--status-done) / 0); }
+}
+
+@keyframes flash-change {
+  from { background-color: hsl(var(--gold) / 0.22); }
+  to   { background-color: transparent; }
+}
+
+@keyframes rail-pulse {
+  0%, 100% { border-left-color: hsl(var(--status-overdue)); }
+  50%      { border-left-color: hsl(var(--status-overdue) / 0.45); }
+}
+
+@keyframes confetti-fall {
+  0%   { transform: translate3d(0, 0, 0) rotate(0deg); opacity: 1; }
+  100% { transform: translate3d(var(--dx, 0px), 100vh, 0) rotate(var(--r, 540deg)); opacity: 0; }
+}
+
 /* ==========================================================================
    ACCESSIBILITY & PRINT
    ========================================================================== */
@@ -702,6 +1275,8 @@
     animation-iteration-count: 1 !important;
     transition-duration: 0.01ms !important;
   }
+
+  .confetti-piece { display: none; }
 }
 
 @media (prefers-contrast: more) {
@@ -711,76 +1286,9 @@
   }
 }
 
-
-/* ==========================================================================
-   LOADING ANIMATIONS
-   Professional and classic loading states for FollowThru
-   ========================================================================== */
-@keyframes spin {
-  from { transform: rotate(0deg); }
-  to { transform: rotate(360deg); }
-}
-
-@keyframes pulse {
-  0%, 100% { opacity: 1; }
-  50% { opacity: 0.5; }
-}
-
-@keyframes shimmer-load {
-  0% { background-position: -1000px 0; }
-  100% { background-position: 1000px 0; }
-}
-
-@keyframes bounce-subtle {
-  0%, 100% { transform: translateY(0); }
-  50% { transform: translateY(-2px); }
-}
-
-@keyframes fade-in {
-  from { opacity: 0; }
-  to { opacity: 1; }
-}
-
-.animate-spin {
-  animation: spin 1s linear infinite;
-}
-
-.animate-pulse {
-  animation: pulse 2s cubic-bezier(0.4, 0, 0.6, 1) infinite;
-}
-
-.animate-shimmer {
-  animation: shimmer-load 2s infinite;
-  background-size: 1000px 100%;
-}
-
-.animate-bounce-subtle {
-  animation: bounce-subtle 1.5s ease-in-out infinite;
-}
-
-.animate-fade-in {
-  animation: fade-in 0.5s ease-out forwards;
-}
-
-/* Loading state utilities */
-.loading-state {
-  position: relative;
-}
-
-.loading-state::after {
-  content: "";
-  position: absolute;
-  inset: 0;
-  background: hsl(var(--background) / 0.8);
-  border-radius: inherit;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  z-index: 10;
-}
-
 @media print {
   body { background: #fff; color: #000; }
   .nav-classic { position: static; }
-  .card-classic, .card-engraved { box-shadow: none; border-color: #ccc; transform: none; }
+  .card-classic, .card-engraved, .status-card { box-shadow: none; border-color: #ccc; transform: none; }
+  .toast-viewport, .confetti-piece { display: none; }
 }

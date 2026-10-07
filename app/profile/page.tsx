@@ -319,14 +319,14 @@ function ProfileContent() {
     { icon: Phone, label: 'Phone', value: profile?.phone },
     { icon: Building2, label: 'Company', value: profile?.company },
     { icon: MapPin, label: 'Location', value: profile?.location },
-    { icon: Calendar, label: 'Member since', value: formatDate(data.user.created_at) },
+    { icon: Calendar, label: 'Member since', value: data?.user?.created_at ? formatDate(data.user.created_at) : undefined },
   ];
 
   const statCards: Array<{ label: string; value: number; note: string; icon: LucideIcon; color: string }> = [
-    { label: 'Total commitments', value: stats.totalTasks, note: `Across ${stats.totalMeetings} meetings`, icon: Briefcase, color: 'text-slate-900' },
-    { label: 'Completed', value: stats.doneTasks, note: `${stats.efficiency}% completion rate`, icon: CheckCircle2, color: 'text-green-700' },
-    { label: 'Open', value: stats.openTasks, note: 'In progress', icon: Clock, color: 'text-blue-700' },
-    { label: 'Overdue', value: stats.overdueTasks, note: 'Needs attention', icon: AlertTriangle, color: 'text-red-700' },
+    { label: 'Total commitments', value: stats?.totalTasks ?? 0, note: `Across ${stats?.totalMeetings ?? 0} meetings`, icon: Briefcase, color: 'text-slate-900' },
+    { label: 'Completed', value: stats?.doneTasks ?? 0, note: `${stats?.efficiency ?? 0}% completion rate`, icon: CheckCircle2, color: 'text-green-700' },
+    { label: 'Open', value: stats?.openTasks ?? 0, note: 'In progress', icon: Clock, color: 'text-blue-700' },
+    { label: 'Overdue', value: stats?.overdueTasks ?? 0, note: 'Needs attention', icon: AlertTriangle, color: 'text-red-700' },
   ];
 
   return (
@@ -540,16 +540,16 @@ function ProfileContent() {
         >
           <div className="mb-2 flex items-center justify-between text-sm">
             <span className="text-slate-600">
-              {stats.myDoneTasks} of {stats.myTasks} assigned commitments completed
+              {stats?.myDoneTasks ?? 0} of {stats?.myTasks ?? 0} assigned commitments completed
             </span>
-            <span className="font-semibold text-slate-900">{stats.myEfficiency}%</span>
+            <span className="font-semibold text-slate-900">{stats?.myEfficiency ?? 0}%</span>
           </div>
-          <Progress value={stats.myEfficiency} className="h-2.5" />
+          <Progress value={stats?.myEfficiency ?? 0} className="h-2.5" />
           <dl className="mt-6 grid grid-cols-3 divide-x divide-slate-200 rounded-md border border-slate-200 bg-slate-50 text-center">
             {[
-              { label: 'My commitments', value: stats.myTasks, color: 'text-slate-900' },
-              { label: 'Completed', value: stats.myDoneTasks, color: 'text-green-700' },
-              { label: 'Remaining', value: stats.myTasks - stats.myDoneTasks, color: 'text-blue-700' },
+              { label: 'My commitments', value: stats?.myTasks ?? 0, color: 'text-slate-900' },
+              { label: 'Completed', value: stats?.myDoneTasks ?? 0, color: 'text-green-700' },
+              { label: 'Remaining', value: (stats?.myTasks ?? 0) - (stats?.myDoneTasks ?? 0), color: 'text-blue-700' },
             ].map((s) => (
               <div key={s.label} className="px-4 py-4">
                 <dd className={`font-serif text-2xl font-semibold ${s.color}`}>{s.value}</dd>
@@ -562,11 +562,11 @@ function ProfileContent() {
         {/* ---------------- Meetings & tasks ---------------- */}
         <div className="grid gap-6 lg:grid-cols-2">
           <Panel title="Recent meetings">
-            {recentMeetings.length === 0 ? (
+            {(recentMeetings?.length ?? 0) === 0 ? (
               <p className="text-sm text-slate-500">No meetings yet.</p>
             ) : (
               <ul className="divide-y divide-slate-200 rounded-md border border-slate-200">
-                {recentMeetings.map((meeting) => {
+                {(recentMeetings ?? []).map((meeting) => {
                   const completion =
                     meeting.total_tasks > 0 ? Math.round((meeting.done_tasks / meeting.total_tasks) * 100) : 0;
                   return (
@@ -599,11 +599,11 @@ function ProfileContent() {
           </Panel>
 
           <Panel title="Upcoming commitments">
-            {upcomingTasks.length === 0 ? (
+            {(upcomingTasks?.length ?? 0) === 0 ? (
               <p className="text-sm text-slate-500">No upcoming commitments.</p>
             ) : (
               <ul className="divide-y divide-slate-200 rounded-md border border-slate-200">
-                {upcomingTasks.map((task) => {
+                {(upcomingTasks ?? []).map((task) => {
                   const dueDate = new Date(task.due_date);
                   const isOverdue = dueDate < new Date();
                   const daysUntil = Math.ceil((dueDate.getTime() - Date.now()) / (1000 * 60 * 60 * 24));
